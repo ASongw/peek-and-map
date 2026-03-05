@@ -149,24 +149,31 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
           if (incoming) {
             for (const call of incoming) {
               const from = call.from;
-              const nodeId = this._allocCallerNodeId(from);
               let preview = '';
               try {
                 const d = await vscode.workspace.openTextDocument(from.uri);
                 preview = d.lineAt(from.selectionRange.start.line).text.trim();
               } catch { /* ignore */ }
-              callers.push({
-                nodeId,
-                label: from.name,
-                detail: this._relativePath(from.uri.fsPath, wsRoot),
-                line: from.selectionRange.start.line,
-                character: from.selectionRange.start.character,
-                callLine: call.fromRanges[0]?.start.line ?? from.selectionRange.start.line,
-                callCharacter: call.fromRanges[0]?.start.character ?? from.selectionRange.start.character,
-                uri: from.uri.toString(),
-                kind: this._symbolKindName(from.kind),
-                preview,
-              });
+              // One node per call site; only the first call site gets an expandable nodeId
+              const ranges = call.fromRanges.length > 0 ? call.fromRanges : [null];
+              for (let i = 0; i < ranges.length; i++) {
+                const r = ranges[i];
+                const nodeId = i === 0
+                  ? this._allocCallerNodeId(from)
+                  : `leaf_${++this._nodeCounter}`;
+                callers.push({
+                  nodeId,
+                  label: from.name,
+                  detail: this._relativePath(from.uri.fsPath, wsRoot),
+                  line: from.selectionRange.start.line,
+                  character: from.selectionRange.start.character,
+                  callLine: r?.start.line ?? from.selectionRange.start.line,
+                  callCharacter: r?.start.character ?? from.selectionRange.start.character,
+                  uri: from.uri.toString(),
+                  kind: this._symbolKindName(from.kind),
+                  preview,
+                });
+              }
             }
           }
         } catch { /* no incoming calls */ }
@@ -205,7 +212,10 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     } catch { /* no reference provider */ }
     if (!locs || locs.length === 0) { return []; }
 
-    const seen = new Map<string, TreeNodeData>();
+    const result: TreeNodeData[] = [];
+    // Tracks which enclosing symbols have already received an expandable nodeId
+    const firstSeenKeys = new Set<string>();
+
     for (const loc of locs) {
       let refDoc: vscode.TextDocument;
       try {
@@ -216,22 +226,19 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       const enclosing = this._deepestContaining(symbols, loc.range.start);
 
       if (!enclosing) {
-        // Reference at file/global scope — show as leaf node
-        const key = loc.uri.toString() + '#loc:' + loc.range.start.line + ':' + loc.range.start.character;
-        if (!seen.has(key)) {
-          seen.set(key, {
-            nodeId: `leaf_${++this._nodeCounter}`, // not stored in map → not expandable
-            label: path.basename(loc.uri.fsPath) + ' (global)',
-            detail: this._relativePath(loc.uri.fsPath, wsRoot),
-            line: loc.range.start.line,
-            character: loc.range.start.character,
-            callLine: loc.range.start.line,
-            callCharacter: loc.range.start.character,
-            uri: loc.uri.toString(),
-            kind: 'Global',
-            preview: refDoc.lineAt(loc.range.start.line).text.trim(),
-          });
-        }
+        // Reference at file/global scope — always show as leaf node (not expandable)
+        result.push({
+          nodeId: `leaf_${++this._nodeCounter}`,
+          label: path.basename(loc.uri.fsPath) + ' (global)',
+          detail: this._relativePath(loc.uri.fsPath, wsRoot),
+          line: loc.range.start.line,
+          character: loc.range.start.character,
+          callLine: loc.range.start.line,
+          callCharacter: loc.range.start.character,
+          uri: loc.uri.toString(),
+          kind: 'Global',
+          preview: refDoc.lineAt(loc.range.start.line).text.trim(),
+        });
         continue;
       }
 
@@ -245,12 +252,16 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         continue;
       }
 
-      // Deduplicate by enclosing symbol identity
-      const key = loc.uri.toString() + '#sym:' + symStart.line + ':' + symStart.character;
-      if (seen.has(key)) { continue; }
+      // First occurrence of this enclosing symbol → expandable; subsequent → leaf
+      const symKey = loc.uri.toString() + '#sym:' + symStart.line + ':' + symStart.character;
+      const isFirst = !firstSeenKeys.has(symKey);
+      if (isFirst) { firstSeenKeys.add(symKey); }
 
-      const nodeId = this._allocRefNodeId(loc.uri, symStart);
-      seen.set(key, {
+      const nodeId = isFirst
+        ? this._allocRefNodeId(loc.uri, symStart)
+        : `leaf_${++this._nodeCounter}`;
+
+      result.push({
         nodeId,
         label: enclosing.name,
         detail: this._relativePath(loc.uri.fsPath, wsRoot),
@@ -264,7 +275,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       });
     }
 
-    return Array.from(seen.values());
+    return result;
   }
 
   // ── Expand: Reference hierarchy ────────────────────────────────────────────
@@ -299,24 +310,31 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       if (incoming) {
         for (const call of incoming) {
           const from = call.from;
-          const childId = this._allocCallerNodeId(from);
           let preview = '';
           try {
             const d = await vscode.workspace.openTextDocument(from.uri);
             preview = d.lineAt(from.selectionRange.start.line).text.trim();
           } catch { /* ignore */ }
-          children.push({
-            nodeId: childId,
-            label: from.name,
-            detail: this._relativePath(from.uri.fsPath, wsRoot),
-            line: from.selectionRange.start.line,
-            character: from.selectionRange.start.character,
-            callLine: call.fromRanges[0]?.start.line ?? from.selectionRange.start.line,
-            callCharacter: call.fromRanges[0]?.start.character ?? from.selectionRange.start.character,
-            uri: from.uri.toString(),
-            kind: this._symbolKindName(from.kind),
-            preview,
-          });
+          // One child node per call site; only the first site gets an expandable nodeId
+          const ranges = call.fromRanges.length > 0 ? call.fromRanges : [null];
+          for (let i = 0; i < ranges.length; i++) {
+            const r = ranges[i];
+            const childId = i === 0
+              ? this._allocCallerNodeId(from)
+              : `leaf_${++this._nodeCounter}`;
+            children.push({
+              nodeId: childId,
+              label: from.name,
+              detail: this._relativePath(from.uri.fsPath, wsRoot),
+              line: from.selectionRange.start.line,
+              character: from.selectionRange.start.character,
+              callLine: r?.start.line ?? from.selectionRange.start.line,
+              callCharacter: r?.start.character ?? from.selectionRange.start.character,
+              uri: from.uri.toString(),
+              kind: this._symbolKindName(from.kind),
+              preview,
+            });
+          }
         }
       }
       this._view.webview.postMessage({ type: 'children', parentNodeId: nodeId, items: children });
