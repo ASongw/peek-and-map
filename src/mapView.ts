@@ -594,6 +594,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     const refSection    = document.getElementById('sec-references');
 
     const loadedNodes = new Set();
+    const nodeChildrenCache = new Map();  // nodeId → children items[]
+    const expandedNodeIds = new Set();    // nodeIds currently expanded
 
     // ── View mode: 'tree' or 'graph' ─────────────────────────────────────
     let viewMode = 'tree';
@@ -610,11 +612,16 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         graphContainer.style.display = 'block';
         if (lastUpdateData) {
           graphBuildFromData(lastUpdateData);
+          restoreGraphExpansions();
+          graphLayout();
+          graphDraw();
         }
       } else {
         graphContainer.style.display = 'none';
         if (lastUpdateData) {
           content.style.display = 'block';
+          renderTreeList(refSection, lastUpdateData.refNodes, 0);
+          restoreTreeExpansions(refSection);
         }
       }
     }
@@ -668,6 +675,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
 
       if (msg.type === 'update') {
         loadedNodes.clear();
+        nodeChildrenCache.clear();
+        expandedNodeIds.clear();
         const d = msg.data;
         lastUpdateData = d;
         symbolNameEl.textContent  = d.symbolName;
@@ -693,6 +702,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       if (msg.type === 'children') {
         const parentNodeId = msg.parentNodeId;
         loadedNodes.add(parentNodeId);
+        nodeChildrenCache.set(parentNodeId, msg.items || []);
+        expandedNodeIds.add(parentNodeId);
 
         // ── Graph expand ──────────────────────────────────────────
         if (viewMode === 'graph') {
@@ -774,6 +785,73 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         + '</div>';
     }
 
+    // ── Restore expansion state helpers ──────────────────────────────────
+
+    /** Recursively restore tree node expansions from shared state */
+    function restoreTreeExpansions(containerEl) {
+      const treeNodes = containerEl.querySelectorAll(':scope > .tree-node');
+      for (const nodeEl of treeNodes) {
+        const nodeId = nodeEl.dataset.nodeId;
+        if (expandedNodeIds.has(nodeId) && nodeChildrenCache.has(nodeId)) {
+          const items = nodeChildrenCache.get(nodeId);
+          if (!items || items.length === 0) continue;
+          const depth = parseInt(nodeEl.dataset.depth || '0', 10) + 1;
+          const toggleEl = nodeEl.querySelector(':scope > .tree-row .tree-toggle');
+          const childrenEl = nodeEl.querySelector(':scope > .tree-children');
+          toggleEl.innerHTML = '<svg viewBox="0 0 16 16"><polyline points="2,6 8,12 14,6"/></svg>';
+          childrenEl.style.display = 'block';
+          childrenEl.innerHTML = items.map(function(item) {
+            return renderTreeNodeHtml(item, depth);
+          }).join('');
+          loadedNodes.add(nodeId);
+          // Recurse into children
+          restoreTreeExpansions(childrenEl);
+        }
+      }
+    }
+
+    /** Recursively restore graph node expansions from shared state */
+    function restoreGraphExpansions() {
+      let changed = true;
+      while (changed) {
+        changed = false;
+        const nodeMap = {};
+        for (const n of gNodes) nodeMap[n.id] = n;
+        for (const n of [...gNodes]) {
+          if (!n.expanded && expandedNodeIds.has(n.id) && nodeChildrenCache.has(n.id)) {
+            const items = nodeChildrenCache.get(n.id);
+            if (!items || items.length === 0) continue;
+            n.expanded = true;
+            loadedNodes.add(n.id);
+            const merged = mergeItemsBySymbol(items);
+            for (const mg of merged) {
+              const item = mg.primary;
+              const nid = item.nodeId;
+              if (nodeMap[nid]) continue;
+              const newNode = {
+                id: nid,
+                label: item.label,
+                kind: item.kind || '',
+                x: 0, y: 0, w: 0, h: G_NODE_H,
+                children: [],
+                expanded: false,
+                loading: false,
+                data: item,
+                parentId: n.id,
+                callSites: mg.callSites,
+                _callBadgeRects: [],
+              };
+              gNodes.push(newNode);
+              nodeMap[newNode.id] = newNode;
+              n.children.push(nid);
+              gEdges.push({ from: n.id, to: nid });
+            }
+            changed = true;
+          }
+        }
+      }
+    }
+
     // ── Click handlers (tree view) ───────────────────────────────────────
     content.addEventListener('click', (e) => {
       const toggle = e.target.closest('.tree-toggle');
@@ -791,6 +869,11 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
           toggle.innerHTML = isVisible
             ? '<svg viewBox="0 0 16 16"><polyline points="6,2 12,8 6,14"/></svg>'
             : '<svg viewBox="0 0 16 16"><polyline points="2,6 8,12 14,6"/></svg>';
+          if (isVisible) {
+            expandedNodeIds.delete(nodeId);
+          } else {
+            expandedNodeIds.add(nodeId);
+          }
         } else {
           toggle.innerHTML = '<svg viewBox="0 0 16 16"><polyline points="6,2 12,8 6,14"/></svg>';
           toggle.classList.add('loading');
@@ -831,21 +914,57 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     // ══════════════════════════════════════════════════════════════════════
 
     const ctx = graphCanvas.getContext('2d');
-    let gNodes = [];   // {id, label, kind, x, y, w, h, children:[], expanded, loading, data, parentId}
+    let gNodes = [];   // {id, label, kind, x, y, w, h, children:[], expanded, loading, data, parentId, callSites:[], _callBadgeRects:[]}
     let gEdges = [];   // {from, to}
     let gPan = {x: 0, y: 0};
     let gZoom = 1;
     let gDragging = false;
     let gDragStart = {x: 0, y: 0};
     let gHover = null;
+    let gHoverCallSite = -1;  // index of hovered call-site badge (-1 = none)
     let gPendingExpand = null; // nodeId waiting for children
     let gAnimFrame = null;
 
     const G_NODE_H = 32;
+    const G_CALL_ROW_H = 16;  // extra height per call-site badge row
     const G_PAD_X = 12;
     const G_PAD_Y = 4;
     const G_LEVEL_GAP_X = 60;
     const G_SIBLING_GAP_Y = 10;
+
+    /**
+     * Merge tree-node items that refer to the same enclosing symbol into a
+     * single entry with multiple call-sites.  Returns an array of
+     * { primary: TreeNodeData, callSites: [{callLine, callCharacter, uri}] }.
+     */
+    function mergeItemsBySymbol(items) {
+      if (!items || items.length === 0) return [];
+      const groups = new Map(); // key -> { items[], expandableItem }
+      const order = [];         // preserve first-seen order of keys
+      for (const item of items) {
+        const key = item.uri + '#' + item.line + ':' + item.character;
+        if (!groups.has(key)) {
+          groups.set(key, { items: [], expandableItem: null });
+          order.push(key);
+        }
+        const g = groups.get(key);
+        g.items.push(item);
+        if (!item.nodeId.startsWith('leaf_') && !g.expandableItem) {
+          g.expandableItem = item;
+        }
+      }
+      return order.map(key => {
+        const g = groups.get(key);
+        const primary = g.expandableItem || g.items[0];
+        const callSites = g.items.map(it => ({
+          callLine: it.callLine != null ? it.callLine : it.line,
+          callCharacter: it.callCharacter != null ? it.callCharacter : it.character,
+          uri: it.uri,
+        }));
+        callSites.sort((a, b) => a.callLine - b.callLine);
+        return { primary, callSites };
+      });
+    }
 
     function graphBuildFromData(d) {
       gNodes = [];
@@ -866,11 +985,14 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         loading: false,
         data: null,
         parentId: null,
+        callSites: null,
+        _callBadgeRects: [],
       });
 
-      // Combine refNodes as first-level children
-      const allChildren = d.refNodes || [];
-      for (const item of allChildren) {
+      // Combine refNodes as first-level children (merge duplicates)
+      const merged = mergeItemsBySymbol(d.refNodes || []);
+      for (const mg of merged) {
+        const item = mg.primary;
         const nid = item.nodeId;
         gNodes.push({
           id: nid,
@@ -882,6 +1004,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
           loading: false,
           data: item,
           parentId: rootId,
+          callSites: mg.callSites,
+          _callBadgeRects: [],
         });
         gNodes[0].children.push(nid);
         gEdges.push({ from: rootId, to: nid });
@@ -961,15 +1085,32 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       const fontSize = 12;
       const font = fontSize + 'px ' + getComputedStyle(document.body).fontFamily;
 
-      // Compute widths
+      // Compute widths and heights
+      const callFont = '10px ' + getComputedStyle(document.body).fontFamily;
       const nodeMap = {};
       for (const n of gNodes) {
         nodeMap[n.id] = n;
         const isRootNode = n.id === '__root__';
         const displayLabel = stripParams(n.label);
         const labelW = gTextWidth(displayLabel, isRootNode ? ('bold ' + font) : font);
-        n.w = G_PAD_X * 2 + 19 + labelW;  // 19 = badge(14) + gap(5)
-        if (n.w < 60) n.w = 60;
+        let baseW = G_PAD_X * 2 + 19 + labelW;  // 19 = badge(14) + gap(5)
+
+        // Multi-callsite: compute badge row width
+        const cs = n.callSites;
+        if (cs && cs.length > 1) {
+          let badgesW = G_PAD_X; // left padding
+          for (let si = 0; si < cs.length; si++) {
+            const txt = 'L' + (cs[si].callLine + 1);
+            badgesW += gTextWidth(txt, callFont) + 8 + 4; // 8=pad, 4=gap
+          }
+          badgesW += G_PAD_X - 4; // right padding minus last gap
+          if (badgesW > baseW) baseW = badgesW;
+          n.h = G_NODE_H + G_CALL_ROW_H;
+        } else {
+          n.h = G_NODE_H;
+        }
+
+        n.w = Math.max(baseW, 60);
       }
 
       // BFS level assignment
@@ -1006,11 +1147,15 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         for (const n of group) {
           if (n.w > maxW) maxW = n.w;
         }
-        const totalH = group.length * G_NODE_H + (group.length - 1) * G_SIBLING_GAP_Y;
+        let totalH = 0;
+        for (const n of group) totalH += n.h;
+        totalH += (group.length - 1) * G_SIBLING_GAP_Y;
         let yStart = (ch / 2) - (totalH / 2);
+        let yCur = yStart;
         for (let i = 0; i < group.length; i++) {
           group[i].x = xOffset;
-          group[i].y = yStart + i * (G_NODE_H + G_SIBLING_GAP_Y);
+          group[i].y = yCur;
+          yCur += group[i].h + G_SIBLING_GAP_Y;
         }
         xOffset += maxW + G_LEVEL_GAP_X;
       }
@@ -1144,6 +1289,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         }
 
         // Kind badge + label (centered, single row)
+        const hasMultiCS = n.callSites && n.callSites.length > 1;
+        const labelY = hasMultiCS ? (n.y + G_NODE_H / 2) : ncy;
         const letter    = nodeKindPrefix(n.kind);
         const badgeW    = 14;
         const badgeH    = 14;
@@ -1157,7 +1304,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
 
         // Badge rounded-rect background
         ctx.fillStyle = hexToRgba(kindBorderColor, 0.22);
-        const bY = ncy - badgeH / 2;
+        const bY = labelY - badgeH / 2;
         ctx.beginPath();
         ctx.roundRect(startX, bY, badgeW, badgeH, 3);
         ctx.fill();
@@ -1167,14 +1314,49 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         ctx.fillStyle = kindBorderColor;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(letter, startX + badgeW / 2, ncy);
+        ctx.fillText(letter, startX + badgeW / 2, labelY);
 
         // Label text
         ctx.font = drawFont;
         ctx.fillStyle = isRoot ? accentColor : (nodeKindColor(n.kind) || funcColor);
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillText(rawLabel, startX + badgeW + badgeGap, ncy);
+        ctx.fillText(rawLabel, startX + badgeW + badgeGap, labelY);
+
+        // ── Call-site line-number badges (only for merged nodes) ──────────
+        n._callBadgeRects = [];
+        const cs = n.callSites;
+        if (cs && cs.length > 1) {
+          const cFont = '10px ' + getComputedStyle(document.body).fontFamily;
+          ctx.font = cFont;
+          const badgeRowY = n.y + G_NODE_H;
+          let bx = n.x + G_PAD_X;
+          for (let si = 0; si < cs.length; si++) {
+            const txt = 'L' + (cs[si].callLine + 1);
+            const tw = ctx.measureText(txt).width;
+            const bw = tw + 8;
+            const bh = 13;
+            const by = badgeRowY + (G_CALL_ROW_H - bh) / 2;
+
+            // Highlight hovered badge
+            const isHot = (gHover === n.id && gHoverCallSite === si);
+
+            // Badge background
+            ctx.fillStyle = isHot ? hexToRgba(accentColor, 0.35) : hexToRgba(dimColor, 0.18);
+            ctx.beginPath();
+            ctx.roundRect(bx, by, bw, bh, 2);
+            ctx.fill();
+
+            // Badge text
+            ctx.fillStyle = isHot ? accentColor : dimColor;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(txt, bx + bw / 2, by + bh / 2);
+
+            n._callBadgeRects.push({ x: bx, y: by, w: bw, h: bh, idx: si });
+            bx += bw + 4;
+          }
+        }
       }
 
       ctx.restore();
@@ -1193,6 +1375,19 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       return null;
     }
 
+    /* Hit-test call-site badge inside a node; returns badge index or -1 */
+    function graphHitTestCallSite(node, cx, cy) {
+      if (!node || !node._callBadgeRects || node._callBadgeRects.length === 0) return -1;
+      const wx = (cx - gPan.x) / gZoom;
+      const wy = (cy - gPan.y) / gZoom;
+      for (const r of node._callBadgeRects) {
+        if (wx >= r.x && wx <= r.x + r.w && wy >= r.y && wy <= r.y + r.h) {
+          return r.idx;
+        }
+      }
+      return -1;
+    }
+
     /* Handle children arriving from extension (graph mode) */
     function graphHandleChildren(parentNodeId, items) {
       const nodeMap = {};
@@ -1209,7 +1404,9 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       }
 
       parent.expanded = true;
-      for (const item of items) {
+      const merged = mergeItemsBySymbol(items);
+      for (const mg of merged) {
+        const item = mg.primary;
         const nid = item.nodeId;
         if (nodeMap[nid]) continue; // avoid duplicates
         gNodes.push({
@@ -1222,6 +1419,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
           loading: false,
           data: item,
           parentId: parentNodeId,
+          callSites: mg.callSites,
+          _callBadgeRects: [],
         });
         parent.children.push(nid);
         gEdges.push({ from: parentNodeId, to: nid });
@@ -1249,8 +1448,11 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       gEdges = gEdges.filter(e => !toRemove.has(e.from) && !toRemove.has(e.to));
       node.children = [];
       node.expanded = false;
-      // Also remove from loadedNodes
-      for (const rid of toRemove) loadedNodes.delete(rid);
+      expandedNodeIds.delete(node.id);
+      for (const rid of toRemove) {
+        loadedNodes.delete(rid);
+        expandedNodeIds.delete(rid);
+      }
     }
 
     // ── Canvas interactions ──────────────────────────────────────────────
@@ -1271,8 +1473,10 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
 
       const hit = graphHitTest(cx, cy);
       const newHover = hit ? hit.id : null;
-      if (newHover !== gHover) {
+      const newCallSite = hit ? graphHitTestCallSite(hit, cx, cy) : -1;
+      if (newHover !== gHover || newCallSite !== gHoverCallSite) {
         gHover = newHover;
+        gHoverCallSite = newCallSite;
         graphCanvas.style.cursor = hit ? 'pointer' : 'default';
         graphDraw();
       }
@@ -1322,6 +1526,14 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
           graphLayout();
           graphDraw();
         } else {
+          // Re-expand from cache if available
+          if (nodeChildrenCache.has(hit.id)) {
+            const cached = nodeChildrenCache.get(hit.id);
+            graphHandleChildren(hit.id, cached);
+            expandedNodeIds.add(hit.id);
+            loadedNodes.add(hit.id);
+            return;
+          }
           if (loadedNodes.has(hit.id)) return;
           hit.loading = true;
           graphDraw();
@@ -1332,12 +1544,12 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
 
       // Single click: update peek view only (do NOT open editor)
       if (e.detail === 1 && hit.data) {
-        vscodeApi.postMessage({
-          type: 'peekOnly',
-          uri: hit.data.uri,
-          line: hit.data.callLine != null ? hit.data.callLine : hit.data.line,
-          character: hit.data.callCharacter != null ? hit.data.callCharacter : hit.data.character,
-        });
+        const csIdx = graphHitTestCallSite(hit, cx, cy);
+        const cs = hit.callSites;
+        const cl = (csIdx >= 0 && cs) ? cs[csIdx].callLine : (hit.data.callLine != null ? hit.data.callLine : hit.data.line);
+        const cc = (csIdx >= 0 && cs) ? cs[csIdx].callCharacter : (hit.data.callCharacter != null ? hit.data.callCharacter : hit.data.character);
+        const cu = (csIdx >= 0 && cs) ? cs[csIdx].uri : hit.data.uri;
+        vscodeApi.postMessage({ type: 'peekOnly', uri: cu, line: cl, character: cc });
       }
     });
 
@@ -1349,12 +1561,12 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       const cy = e.clientY - rect.top;
       const hit = graphHitTest(cx, cy);
       if (!hit || !hit.data) return;
-      vscodeApi.postMessage({
-        type: 'jumpTo',
-        uri: hit.data.uri,
-        line: hit.data.callLine != null ? hit.data.callLine : hit.data.line,
-        character: hit.data.callCharacter != null ? hit.data.callCharacter : hit.data.character,
-      });
+      const csIdx = graphHitTestCallSite(hit, cx, cy);
+      const cs = hit.callSites;
+      const cl = (csIdx >= 0 && cs) ? cs[csIdx].callLine : (hit.data.callLine != null ? hit.data.callLine : hit.data.line);
+      const cc = (csIdx >= 0 && cs) ? cs[csIdx].callCharacter : (hit.data.callCharacter != null ? hit.data.callCharacter : hit.data.character);
+      const cu = (csIdx >= 0 && cs) ? cs[csIdx].uri : hit.data.uri;
+      vscodeApi.postMessage({ type: 'jumpTo', uri: cu, line: cl, character: cc });
     });
 
     // Resize observer for canvas
