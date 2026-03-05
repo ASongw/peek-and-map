@@ -56,6 +56,8 @@ peek/
 - `loadThemeTokenColors()`：递归加载主题文件（含 `include` 继承链）
 - `resolveActiveThemeTokenColors()`：根据 `workbench.colorTheme` 找到主题扩展并解析
 - `findBestSetting()`：TextMate 前缀匹配，为目标 scope 找最佳颜色
+- `SYMBOL_KIND_TO_TM`：符号类型（Function/Class/Method…）→ TextMate scope 映射表
+- `generateSymbolKindCss()`：生成 `--peek-kind-*` CSS 自定义属性，供 Peek View 和 Map View 的符号徽章使用真实主题颜色
 - `generateThemeTokenCss()`：生成 Prism token 的动态 CSS
 
 ### `utils.ts` — 工具函数
@@ -80,7 +82,7 @@ peek/
 
 ### `mapView.ts` — Map View 面板
 
-`RelationViewProvider` 实现 `WebviewViewProvider`，提供两个维度的符号关系分析，并支持树形列表和 Canvas 图形两种视图模式：
+`MapViewProvider` 实现 `WebviewViewProvider`，提供两个维度的符号关系分析，并支持树形列表和 Canvas 图形两种视图模式：
 
 | 方法 | 说明 |
 |------|------|
@@ -103,7 +105,7 @@ peek/
 | `stripParams(name)` | 去除函数参数：`"foo(a, b)"` → `"foo"` |
 | `graphBuildFromData(d)` | 从搜索结果构建图形节点/边数据 |
 | `graphLayout()` | BFS 层级布局 + 宽度计算 + 居中定位 |
-| `graphDraw()` | Canvas 2D 渲染：Bezier 曲线连边、箭头、圆角矩形节点（统一形状）、彩色图标前缀（按种类着色，如 `ƒ` Function=蓝、`⊛` Method=紫、`◆` Class=琥珀等）、标签 |
+| `graphDraw()` | Canvas 2D 渲染：Bezier 曲线连边、箭头、圆角矩形节点（统一形状）、彩色字母徽章前缀（如 `f` Function、`m` Method、`C` Class 等，颜色继承自主题 `--peek-kind-*` CSS 变量）、标签 |
 | `graphHitTest(cx, cy)` | 鼠标坐标命中测试 |
 | `graphHandleChildren()` | 处理扩展后返回的子节点，更新图形 |
 | `graphCollapse(node)` | 递归移除所有后代节点 |

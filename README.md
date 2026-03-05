@@ -27,7 +27,7 @@
 | **行号点击跳转**         | 单击面板中任意行号，编辑器光标即跳转到对应行                                                                                                          |
 | **跨文件导航**           | 定义在其他文件时，跳转会自动打开对应文件并定位                                                                                                        |
 | **顶栏显示文件名**       | 定义来自其他文件时，顶栏显示该文件的文件名                                                                                                            |
-| **符号类型标签**         | 顶栏显示当前符号的类型（Function、Method、Class、Struct…）和名称                                                                                     |
+| **符号类型标签**         | 顶栏显示彩色字母徽章（如 `f` Function、`m` Method、`C` Class、`S` Struct…）和符号名称，颜色继承自当前 VS Code 主题                                    |
 | **适配 VS Code 主题**    | UI 颜色（背景、行号、标题栏等）使用 VS Code CSS 变量，自动适配任意主题                                                                                |
 | **完全离线**             | Prism.js 从本地 `media/` 加载，无需网络                                                                                                             |
 
@@ -38,11 +38,11 @@
 | **引用分析**               | 点击「Analysis」按钮后，在 References 标签页中展示所有引用当前符号的封闭函数/类，按符号去重                                                                                                                                                                             |
 | **调用者分析**             | 在 Callers 标签页中展示调用当前函数的上游调用者（基于 Call Hierarchy）                                                                                                                                                                                                  |
 | **懒加载树展开**           | 树节点支持点击 SVG 箭头递归加载子引用或上游调用者，已展开节点可折叠/展开无需重新请求                                                                                                                                                                                    |
-| **跳转到定义位置**         | 单击树节点可直接跳转到对应位置并打开文件                                                                                                                                                                                                                                |
+| **单击预览 / 双击跳转**    | 单击树节点在 Peek View 中预览定义（不打开编辑器）；双击树节点在编辑器中打开文件并定位，同时更新 Peek View                                                                                                                                                               |
 | **计数徽章**               | 标签页标题旁显示引用和调用者的数量                                                                                                                                                                                                                                      |
-| **图形视图（Graph View）** | 点击「View」按钮可在树形列表与 Canvas 图形视图间切换；图形视图以 BFS 树布局展示符号关系，Bezier 曲线连边；节点统一为圆角矩形，通过**符号名前的彩色图标**（`ƒ` Function、`⊛` Method、`◆` Class、`◇` Interface、`⊟` Variable、`⊠` Constant、`⊡` Property、`⊞` Field、`≡` Enum、`⬡` Module/Namespace、`▪` Struct、`⊕` Ctor）区分对象类型，边框颜色与图标颜色一致 |
+| **图形视图（Graph View）** | 点击「View」按钮可在树形列表与 Canvas 图形视图间切换；图形视图以 BFS 树布局展示符号关系，Bezier 曲线连边；节点统一为圆角矩形，通过**符号名前的彩色字母徽章**（`f` Function、`m` Method、`C` Class、`I` Interface、`v` Variable、`c` Constant、`p` Property、`F` Field、`E` Enum、`M` Module、`N` Namespace、`S` Struct、`K` Ctor、`G` Global、`R` Root）区分对象类型，徽章与边框颜色一致 |
 | **图形视图交互**           | 单击节点在 Peek View 中预览（preserveFocus）、双击在编辑器中打开、Ctrl+点击展开/折叠子节点、滚轮缩放、拖拽平移                                                                                                                                                        |
-| **函数参数省略**           | 图形视图中函数标签自动去除参数列表（如 `foo(a, b)` → `foo`），保持节点简洁                                                                                                                                                                                         |
+| **函数参数省略**           | 树形列表和图形视图中函数标签均自动去除参数列表（如 `foo(a, b)` → `foo`），保持显示简洁                                                                                                                                                                             |
 | **Emoji 图标按钮**         | Analysis（🔍）和 View（📽️）按钮使用 Emoji 图标，简洁直观                                                                                                                                                                                                              |
 
 ---
