@@ -161,6 +161,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
                 detail: this._relativePath(from.uri.fsPath, wsRoot),
                 line: from.selectionRange.start.line,
                 character: from.selectionRange.start.character,
+                callLine: call.fromRanges[0]?.start.line ?? from.selectionRange.start.line,
+                callCharacter: call.fromRanges[0]?.start.character ?? from.selectionRange.start.character,
                 uri: from.uri.toString(),
                 kind: this._symbolKindName(from.kind),
                 preview,
@@ -223,6 +225,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
             detail: this._relativePath(loc.uri.fsPath, wsRoot),
             line: loc.range.start.line,
             character: loc.range.start.character,
+            callLine: loc.range.start.line,
+            callCharacter: loc.range.start.character,
             uri: loc.uri.toString(),
             kind: 'Global',
             preview: refDoc.lineAt(loc.range.start.line).text.trim(),
@@ -252,6 +256,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         detail: this._relativePath(loc.uri.fsPath, wsRoot),
         line: symStart.line,
         character: symStart.character,
+        callLine: loc.range.start.line,
+        callCharacter: loc.range.start.character,
         uri: loc.uri.toString(),
         kind: this._symbolKindName(enclosing.kind),
         preview: refDoc.lineAt(symStart.line).text.trim(),
@@ -305,6 +311,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
             detail: this._relativePath(from.uri.fsPath, wsRoot),
             line: from.selectionRange.start.line,
             character: from.selectionRange.start.character,
+            callLine: call.fromRanges[0]?.start.line ?? from.selectionRange.start.line,
+            callCharacter: call.fromRanges[0]?.start.character ?? from.selectionRange.start.character,
             uri: from.uri.toString(),
             kind: this._symbolKindName(from.kind),
             preview,
@@ -526,8 +534,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     .tree-row {
       display: flex;
       align-items: center;
-      gap: 5px;
-      padding: 3px 8px;
+      padding: 2px 0;
       cursor: pointer;
       transition: background 0.1s;
       white-space: nowrap;
@@ -563,17 +570,12 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       to   { transform: rotate(360deg); }
     }
     .item-icon {
-      font-size: 9px;
-      font-weight: 700;
-      padding: 0px 3px;
-      border-radius: 3px;
-      background: var(--vscode-badge-background, #4d4d4d);
-      color: var(--vscode-badge-foreground, #fff);
-      text-transform: uppercase;
+      font-size: 13px;
       flex-shrink: 0;
-      min-width: 24px;
+      width: 16px;
       text-align: center;
       display: inline-block;
+      line-height: 1;
     }
     .tree-row .item-name {
       font-weight: 600;
@@ -581,13 +583,45 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .tree-row .item-location {
+    .col-name {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      overflow: hidden;
+    }
+    .col-file {
+      width: 140px;
+      flex-shrink: 0;
       font-size: 12px;
       color: var(--vscode-descriptionForeground, #858585);
       overflow: hidden;
       text-overflow: ellipsis;
-      flex-shrink: 1;
+      padding: 0 8px;
     }
+    .col-line {
+      width: 50px;
+      flex-shrink: 0;
+      font-size: 12px;
+      color: var(--vscode-descriptionForeground, #858585);
+      text-align: right;
+      padding-right: 8px;
+    }
+    .table-header {
+      display: flex;
+      padding: 3px 0;
+      border-bottom: 1px solid var(--vscode-panel-border, #333);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--vscode-descriptionForeground, #858585);
+      position: sticky;
+      top: 0;
+      background: var(--vscode-panel-background, #1e1e1e);
+      z-index: 1;
+      user-select: none;
+    }
+    .table-header .col-name { padding-left: 28px; }
     .tree-children { /* nested children container */ }
 
     /* ── Leaf (non-expandable) tree items ────────────────────────── */
@@ -640,6 +674,11 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
   </div>
   <div id="empty-msg">Place cursor on a symbol, then click "Analysis"</div>
   <div id="content" style="display:none">
+    <div class="table-header">
+      <div class="col-name">Symbol</div>
+      <div class="col-file">File</div>
+      <div class="col-line">Line</div>
+    </div>
     <div class="section active" id="sec-references"></div>
     <div class="section" id="sec-callers"></div>
   </div>
@@ -788,7 +827,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         // ── Tree expand ───────────────────────────────────────────
         const nodeEl = document.querySelector('[data-node-id="' + parentNodeId + '"]');
         if (!nodeEl) return;
-        const toggleEl = nodeEl.querySelector(':scope > .tree-row > .tree-toggle');
+        const toggleEl = nodeEl.querySelector(':scope > .tree-row .tree-toggle');
         const childrenEl = nodeEl.querySelector(':scope > .tree-children');
 
         if (!msg.items || msg.items.length === 0) {
@@ -836,18 +875,24 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       const pad = depth * 16;
       const isLeaf = item.nodeId.startsWith('leaf_');
       const kindHtml = item.kind
-        ? '<span class="item-icon">' + escapeHtml(item.kind) + '</span>'
+        ? '<span class="item-icon" style="color:' + (nodeKindColor(item.kind) || 'inherit') + '">' + kindSymbol(item.kind) + '</span>'
         : '';
       const toggleChar = isLeaf ? '' : '<svg viewBox="0 0 16 16"><polyline points="6,2 12,8 6,14"/></svg>';
+      const callLine = item.callLine != null ? item.callLine : item.line;
+      const callChar = item.callCharacter != null ? item.callCharacter : item.character;
       return '<div class="tree-node" data-node-id="' + escapeAttr(item.nodeId) + '" data-depth="' + depth + '"'
         + (isLeaf ? ' data-leaf="1"' : '') + '>'
-        + '<div class="tree-row" style="padding-left:' + (pad + 4) + 'px"'
+        + '<div class="tree-row"'
         + ' data-uri="' + escapeAttr(item.uri) + '"'
-        + ' data-line="' + item.line + '" data-char="' + item.character + '">'
+        + ' data-line="' + item.line + '" data-char="' + item.character + '"'
+        + ' data-call-line="' + callLine + '" data-call-char="' + callChar + '">'
+        + '<div class="col-name" style="padding-left:' + (pad + 4) + 'px">'
         + '<span class="tree-toggle">' + toggleChar + '</span>'
         + kindHtml
-        + '<span class="item-name">' + escapeHtml(item.label) + '</span>'
-        + '<span class="item-location">' + escapeHtml(item.detail) + ':' + (item.line + 1) + '</span>'
+        + '<span class="item-name">' + escapeHtml(stripParams(item.label)) + '</span>'
+        + '</div>'
+        + '<div class="col-file" title="' + escapeAttr(item.detail) + '">' + escapeHtml(item.detail) + '</div>'
+        + '<div class="col-line">' + (callLine + 1) + '</div>'
         + '</div>'
         + '<div class="tree-children" style="display:none"></div>'
         + '</div>';
@@ -890,8 +935,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         vscodeApi.postMessage({
           type: 'jumpTo',
           uri: treeRow.dataset.uri,
-          line: parseInt(treeRow.dataset.line, 10),
-          character: parseInt(treeRow.dataset.char, 10),
+          line: parseInt(treeRow.dataset.callLine, 10),
+          character: parseInt(treeRow.dataset.callChar, 10),
         });
         return;
       }
@@ -968,12 +1013,31 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       return ctx.measureText(text).width;
     }
 
-    /* Return shape group for a kind */
-    function nodeShapeGroup(kind) {
-      if (kind === 'Class' || kind === 'Struct' || kind === 'Interface' || kind === 'Enum') return 'diamond';
-      if (kind === 'Variable' || kind === 'Constant' || kind === 'Property' || kind === 'Field') return 'ellipse';
-      if (kind === 'Module' || kind === 'Namespace') return 'parallelogram';
-      return 'rounded_rect';
+    /* Return prefix symbol for a kind */
+    function nodeKindPrefix(kind) {
+      const prefixes = {
+        'Function':  '⨍',
+        'Method':    '◈',
+        'Class':     '◆',
+        'Interface': '◇',
+        'Variable':  '▽',
+        'Constant':  '▼',
+        'Property':  '◉',
+        'Field':     '○',
+        'Enum':      '▣',
+        'Module':    '◫',
+        'Namespace': '◧',
+        'Struct':    '▢',
+        'Ctor':      '⊕',
+        'Global':    '◎',
+        'Root':      '★',
+      };
+      return prefixes[kind] || '•';
+    }
+
+    /* Return symbol for a kind (used in tree view) */
+    function kindSymbol(kind) {
+      return nodeKindPrefix(kind);
     }
 
     /* Return accent color for a kind */
@@ -1010,16 +1074,15 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       const fontSize = 12;
       const font = fontSize + 'px ' + getComputedStyle(document.body).fontFamily;
 
-      // Compute widths (single-row label; extra padding for diamond/ellipse shapes)
+      // Compute widths
       const nodeMap = {};
       for (const n of gNodes) {
         nodeMap[n.id] = n;
         const isRootNode = n.id === '__root__';
-        const displayLabel = stripParams(n.label);
+        const prefix = nodeKindPrefix(n.kind);
+        const displayLabel = prefix + ' ' + stripParams(n.label);
         const labelW = gTextWidth(displayLabel, isRootNode ? ('bold ' + font) : font);
-        const shapeGrp = nodeShapeGroup(n.kind);
-        const extraPad = (shapeGrp === 'diamond' || shapeGrp === 'ellipse') ? 20 : (shapeGrp === 'parallelogram' ? 12 : 0);
-        n.w = G_PAD_X * 2 + labelW + extraPad;
+        n.w = G_PAD_X * 2 + labelW;
         if (n.w < 60) n.w = 60;
       }
 
@@ -1142,42 +1205,24 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         const isHover = gHover === n.id;
         const isRoot = n.id === '__root__';
 
-        // Node shape, color, background
+        // Node shape: all use rounded rectangle, kind distinguished by prefix icon
         const kindBorderColor = nodeKindColor(n.kind) || dimColor;
         ctx.fillStyle = isHover ? (hoverBg.includes('rgba') ? 'rgba(255,255,255,0.1)' : hoverBg) : nodeBg;
         ctx.strokeStyle = isRoot ? accentColor : (isHover ? accentColor : kindBorderColor);
         ctx.lineWidth = isRoot ? 2.5 : 1.5;
-        const shapeGrp = nodeShapeGroup(n.kind);
         const ncx = n.x + n.w / 2, ncy = n.y + n.h / 2;
+        const r = 5;
         ctx.beginPath();
-        if (shapeGrp === 'diamond') {
-          ctx.moveTo(ncx, n.y);
-          ctx.lineTo(n.x + n.w, ncy);
-          ctx.lineTo(ncx, n.y + n.h);
-          ctx.lineTo(n.x, ncy);
-          ctx.closePath();
-        } else if (shapeGrp === 'ellipse') {
-          ctx.ellipse(ncx, ncy, n.w / 2, n.h / 2, 0, 0, Math.PI * 2);
-        } else if (shapeGrp === 'parallelogram') {
-          const sk = 8;
-          ctx.moveTo(n.x + sk, n.y);
-          ctx.lineTo(n.x + n.w, n.y);
-          ctx.lineTo(n.x + n.w - sk, n.y + n.h);
-          ctx.lineTo(n.x, n.y + n.h);
-          ctx.closePath();
-        } else {
-          const r = 5;
-          ctx.moveTo(n.x + r, n.y);
-          ctx.lineTo(n.x + n.w - r, n.y);
-          ctx.quadraticCurveTo(n.x + n.w, n.y, n.x + n.w, n.y + r);
-          ctx.lineTo(n.x + n.w, n.y + n.h - r);
-          ctx.quadraticCurveTo(n.x + n.w, n.y + n.h, n.x + n.w - r, n.y + n.h);
-          ctx.lineTo(n.x + r, n.y + n.h);
-          ctx.quadraticCurveTo(n.x, n.y + n.h, n.x, n.y + n.h - r);
-          ctx.lineTo(n.x, n.y + r);
-          ctx.quadraticCurveTo(n.x, n.y, n.x + r, n.y);
-          ctx.closePath();
-        }
+        ctx.moveTo(n.x + r, n.y);
+        ctx.lineTo(n.x + n.w - r, n.y);
+        ctx.quadraticCurveTo(n.x + n.w, n.y, n.x + n.w, n.y + r);
+        ctx.lineTo(n.x + n.w, n.y + n.h - r);
+        ctx.quadraticCurveTo(n.x + n.w, n.y + n.h, n.x + n.w - r, n.y + n.h);
+        ctx.lineTo(n.x + r, n.y + n.h);
+        ctx.quadraticCurveTo(n.x, n.y + n.h, n.x, n.y + n.h - r);
+        ctx.lineTo(n.x, n.y + r);
+        ctx.quadraticCurveTo(n.x, n.y, n.x + r, n.y);
+        ctx.closePath();
         ctx.fill();
         ctx.stroke();
 
@@ -1212,13 +1257,21 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
           ctx.fillText(n.expanded ? '−' : '+', bx, by);
         }
 
-        // Label (centered, single row)
-        const displayLabel = stripParams(n.label);
+        // Label with kind prefix (centered, single row)
+        const prefix = nodeKindPrefix(n.kind);
+        const displayLabel = prefix + ' ' + stripParams(n.label);
         ctx.font = isRoot ? ('bold ' + font) : font;
-        ctx.fillStyle = isRoot ? accentColor : funcColor;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(displayLabel, ncx, ncy);
+        // Draw prefix in kind color, label in function color
+        const prefixW = gTextWidth(prefix + ' ', ctx.font);
+        const labelW = gTextWidth(displayLabel, ctx.font);
+        const labelStartX = ncx - labelW / 2;
+        ctx.fillStyle = kindBorderColor;
+        ctx.textAlign = 'left';
+        ctx.fillText(prefix, labelStartX, ncy);
+        ctx.fillStyle = isRoot ? accentColor : funcColor;
+        ctx.fillText(stripParams(n.label), labelStartX + prefixW, ncy);
       }
 
       ctx.restore();
@@ -1380,8 +1433,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         vscodeApi.postMessage({
           type: 'peekOnly',
           uri: hit.data.uri,
-          line: hit.data.line,
-          character: hit.data.character,
+          line: hit.data.callLine != null ? hit.data.callLine : hit.data.line,
+          character: hit.data.callCharacter != null ? hit.data.callCharacter : hit.data.character,
         });
       }
     });
@@ -1397,8 +1450,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       vscodeApi.postMessage({
         type: 'jumpTo',
         uri: hit.data.uri,
-        line: hit.data.line,
-        character: hit.data.character,
+        line: hit.data.callLine != null ? hit.data.callLine : hit.data.line,
+        character: hit.data.callCharacter != null ? hit.data.callCharacter : hit.data.character,
       });
     });
 

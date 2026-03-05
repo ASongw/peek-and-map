@@ -18,6 +18,8 @@ export interface TreeNodeData {
   detail: string;
   line: number;
   character: number;
+  callLine: number;       // line where the reference/call actually occurs
+  callCharacter: number;  // character where the reference/call actually occurs
   uri: string;
   kind?: string;
   preview: string;
