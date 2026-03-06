@@ -144,6 +144,18 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     this._view.webview.postMessage({
       type: 'update',
       data: {
+        rootNode: {
+          nodeId: '__root__',
+          label: word,
+          detail: this._relativePath(doc.uri.fsPath, wsRoot),
+          line: queryPos.line,
+          character: queryPos.character,
+          callLine: queryPos.line,
+          callCharacter: queryPos.character,
+          uri: doc.uri.toString(),
+          kind: rootKind || 'Function',
+          preview: doc.lineAt(queryPos.line).text.trim(),
+        },
         symbolName: word,
         symbolKind: rootKind,
         fileName: path.basename(doc.uri.fsPath),
@@ -361,7 +373,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       min-height: 28px;
       user-select: none;
     }
-    #search-btn, #view-toggle-btn {
+    #search-btn {
       cursor: pointer;
       padding: 2px 8px;
       font-size: 12px;
@@ -377,29 +389,38 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       align-items: center;
       gap: 4px;
     }
-    #search-btn:hover, #view-toggle-btn:hover {
+    #search-btn:hover {
       background: var(--vscode-button-hoverBackground, #1177bb);
     }
-    #search-btn .btn-icon, #view-toggle-btn .btn-icon {
+    #search-btn .btn-icon {
       font-size: 14px;
       line-height: 1;
     }
-    #symbol-name {
-      font-weight: 600;
+    #view-tabs {
+      display: inline-flex;
+      border: 1px solid var(--vscode-panel-border, #333);
+      border-radius: 4px;
       overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      flex: 1;
-    }
-    #file-name {
-      font-size: 12px;
-      color: var(--vscode-descriptionForeground, #858585);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 200px;
       flex-shrink: 0;
     }
+    .view-tab {
+      cursor: pointer;
+      padding: 2px 10px;
+      font-size: 12px;
+      line-height: 1.4;
+      border: none;
+      background: var(--vscode-sideBarSectionHeader-background, #252526);
+      color: var(--vscode-foreground, #d4d4d4);
+      border-right: 1px solid var(--vscode-panel-border, #333);
+    }
+    .view-tab:last-child {
+      border-right: none;
+    }
+    .view-tab.active {
+      background: var(--vscode-tab-activeBackground, #1e1e1e);
+      color: var(--vscode-tab-activeForeground, #fff);
+    }
+    #header-spacer { flex: 1; }
 
     /* ── Content ────────────────────────────────────────────────── */
     #empty-msg {
@@ -561,9 +582,12 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
 <body>
   <div id="header">
     <button id="search-btn" title="Analyze symbol at cursor"><span class="btn-icon">🔍</span> Analysis</button>
-    <button id="view-toggle-btn" title="Toggle Graph / Tree view"><span class="btn-icon">📽️</span> View</button>
-    <span id="symbol-name">Select a symbol, then click "Analysis"</span>
-    <span id="file-name"></span>
+    <div id="view-tabs" role="tablist" aria-label="Map View Mode">
+      <button id="view-tab-tree" class="view-tab active" role="tab" aria-selected="true" title="Outline view">Outline</button>
+      <button id="view-tab-graph" class="view-tab" role="tab" aria-selected="false" title="Horizontal graph view">Horiz</button>
+      <button id="view-tab-graph-up" class="view-tab" role="tab" aria-selected="false" title="Vertical graph view">Vert</button>
+    </div>
+    <span id="header-spacer"></span>
   </div>
   <div id="empty-msg">Place cursor on a symbol, then click "Analysis"</div>
   <div id="content" style="display:none">
@@ -583,12 +607,12 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     const vscodeApi = acquireVsCodeApi();
     vscodeApi.postMessage({ type: 'ready' });
 
-    const symbolNameEl = document.getElementById('symbol-name');
-    const fileNameEl   = document.getElementById('file-name');
     const emptyMsg     = document.getElementById('empty-msg');
     const content      = document.getElementById('content');
     const searchBtn    = document.getElementById('search-btn');
-    const viewToggleBtn = document.getElementById('view-toggle-btn');
+    const viewTabTree  = document.getElementById('view-tab-tree');
+    const viewTabGraph = document.getElementById('view-tab-graph');
+    const viewTabGraphUp = document.getElementById('view-tab-graph-up');
     const graphContainer = document.getElementById('graph-container');
     const graphCanvas   = document.getElementById('graph-canvas');
     const refSection    = document.getElementById('sec-references');
@@ -597,17 +621,33 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     const nodeChildrenCache = new Map();  // nodeId → children items[]
     const expandedNodeIds = new Set();    // nodeIds currently expanded
 
-    // ── View mode: 'tree' or 'graph' ─────────────────────────────────────
+    // ── View mode: 'tree' | 'graph' | 'graph-up' ─────────────────────────
     let viewMode = 'tree';
+    let graphDirection = 'right'; // 'right' | 'up'
     // Store last update data for graph rendering
     let lastUpdateData = null;
 
-    const TREE_ICON = '';
-    const GRAPH_ICON = '';
+    function updateViewTabs() {
+      const treeActive = viewMode === 'tree';
+      const graphActive = viewMode === 'graph';
+      const graphUpActive = viewMode === 'graph-up';
+      viewTabTree.classList.toggle('active', treeActive);
+      viewTabGraph.classList.toggle('active', graphActive);
+      viewTabGraphUp.classList.toggle('active', graphUpActive);
+      viewTabTree.setAttribute('aria-selected', treeActive ? 'true' : 'false');
+      viewTabGraph.setAttribute('aria-selected', graphActive ? 'true' : 'false');
+      viewTabGraphUp.setAttribute('aria-selected', graphUpActive ? 'true' : 'false');
+    }
+
+    function isGraphMode(mode) {
+      return mode === 'graph' || mode === 'graph-up';
+    }
 
     function setViewMode(mode) {
       viewMode = mode;
-      if (mode === 'graph') {
+      graphDirection = mode === 'graph-up' ? 'up' : 'right';
+      updateViewTabs();
+      if (isGraphMode(mode)) {
         content.style.display = 'none';
         graphContainer.style.display = 'block';
         if (lastUpdateData) {
@@ -619,16 +659,17 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       } else {
         graphContainer.style.display = 'none';
         if (lastUpdateData) {
+          const rootNode = lastUpdateData.rootNode || null;
           content.style.display = 'block';
-          renderTreeList(refSection, lastUpdateData.refNodes, 0);
+          renderTreeList(refSection, rootNode ? [rootNode] : (lastUpdateData.refNodes || []), 0);
           restoreTreeExpansions(refSection);
         }
       }
     }
 
-    viewToggleBtn.addEventListener('click', () => {
-      setViewMode(viewMode === 'tree' ? 'graph' : 'tree');
-    });
+    viewTabTree.addEventListener('click', () => setViewMode('tree'));
+    viewTabGraph.addEventListener('click', () => setViewMode('graph'));
+    viewTabGraphUp.addEventListener('click', () => setViewMode('graph-up'));
 
     // ── Search button ────────────────────────────────────────────────────
     searchBtn.addEventListener('click', () => {
@@ -644,9 +685,6 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         emptyMsg.style.display = 'flex';
         content.style.display  = 'none';
         graphContainer.style.display = 'none';
-        symbolNameEl.textContent  = msg.message;
-        symbolNameEl.style.color  = '';
-        fileNameEl.textContent    = '';
         lastUpdateData = null;
         return;
       }
@@ -656,20 +694,13 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         emptyMsg.style.display = 'flex';
         content.style.display  = 'none';
         graphContainer.style.display = 'none';
-        symbolNameEl.textContent  = msg.symbolName;
-        symbolNameEl.style.color  = '';
-        fileNameEl.textContent    = '';
         return;
       }
 
       if (msg.type === 'themeColors') {
         document.getElementById('theme-tokens').textContent = msg.css;
-        // Re-color symbol name header if we have an active result
-        if (lastUpdateData?.symbolKind) {
-          symbolNameEl.style.color = nodeKindColor(lastUpdateData.symbolKind) || 'var(--vscode-symbolIcon-functionForeground,#dcdcaa)';
-        }
         // Redraw graph in case it's visible, so node border colors update
-        if (viewMode === 'graph' && lastUpdateData) { graphDraw(); }
+        if (isGraphMode(viewMode) && lastUpdateData) { graphDraw(); }
         return;
       }
 
@@ -678,14 +709,21 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         nodeChildrenCache.clear();
         expandedNodeIds.clear();
         const d = msg.data;
+        const rootNode = d.rootNode || null;
         lastUpdateData = d;
-        symbolNameEl.textContent  = d.symbolName;
-        symbolNameEl.style.color  = nodeKindColor(d.symbolKind) || 'var(--vscode-symbolIcon-functionForeground,#dcdcaa)';
-        fileNameEl.textContent    = d.fileName ? '  ' + d.fileName : '';
         emptyMsg.style.display   = 'none';
 
-        // Tree view
-        renderTreeList(refSection, d.refNodes, 0);
+        if (rootNode) {
+          loadedNodes.add(rootNode.nodeId);
+          nodeChildrenCache.set(rootNode.nodeId, d.refNodes || []);
+          expandedNodeIds.add(rootNode.nodeId);
+        }
+
+        // Tree view (root node included)
+        renderTreeList(refSection, rootNode ? [rootNode] : (d.refNodes || []), 0);
+        if (rootNode) {
+          restoreTreeExpansions(refSection);
+        }
 
         if (viewMode === 'tree') {
           content.style.display = 'block';
@@ -706,7 +744,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         expandedNodeIds.add(parentNodeId);
 
         // ── Graph expand ──────────────────────────────────────────
-        if (viewMode === 'graph') {
+        if (isGraphMode(viewMode)) {
           graphHandleChildren(parentNodeId, msg.items || []);
           return;
         }
@@ -930,7 +968,9 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     const G_PAD_X = 12;
     const G_PAD_Y = 4;
     const G_LEVEL_GAP_X = 60;
+    const G_LEVEL_GAP_Y = 56;
     const G_SIBLING_GAP_Y = 10;
+    const G_SIBLING_GAP_X = 10;
 
     /**
      * Merge tree-node items that refer to the same enclosing symbol into a
@@ -974,16 +1014,16 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       gPendingExpand = null;
 
       // Root node (the queried symbol)
-      const rootId = '__root__';
+      const rootId = d.rootNode?.nodeId || '__root__';
       gNodes.push({
         id: rootId,
-        label: d.symbolName,
-        kind: 'Root',
+        label: d.rootNode?.label || d.symbolName,
+        kind: d.rootNode?.kind || 'Function',
         x: 0, y: 0, w: 0, h: G_NODE_H,
         children: [],
         expanded: true,
         loading: false,
-        data: null,
+        data: d.rootNode || null,
         parentId: null,
         callSites: null,
         _callBadgeRects: [],
@@ -1139,25 +1179,126 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         if (lv > maxLevel) maxLevel = lv;
       }
 
-      // Position: X by level, Y spread vertically
-      let xOffset = 40;
-      for (let lv = 0; lv <= maxLevel; lv++) {
-        const group = byLevel[lv] || [];
-        let maxW = 0;
-        for (const n of group) {
-          if (n.w > maxW) maxW = n.w;
+      if (graphDirection === 'up') {
+        // Position: Y by level (upward), X spread horizontally
+        const levelMaxH = {};
+        for (let lv = 0; lv <= maxLevel; lv++) {
+          const group = byLevel[lv] || [];
+          let maxH = 0;
+          for (const n of group) {
+            if (n.h > maxH) maxH = n.h;
+          }
+          levelMaxH[lv] = maxH;
         }
-        let totalH = 0;
-        for (const n of group) totalH += n.h;
-        totalH += (group.length - 1) * G_SIBLING_GAP_Y;
-        let yStart = (ch / 2) - (totalH / 2);
-        let yCur = yStart;
-        for (let i = 0; i < group.length; i++) {
-          group[i].x = xOffset;
-          group[i].y = yCur;
-          yCur += group[i].h + G_SIBLING_GAP_Y;
+
+        let yOffset = 40;
+        let prevLevelOrder = new Map();
+        for (let lv = 0; lv <= maxLevel; lv++) {
+          const group = (byLevel[lv] || []).slice();
+
+          // Keep sibling ordering stable and independent from expansion order.
+          // Primary key: parent order from previous level, then parent x-center,
+          // then call-site position/name for deterministic ordering.
+          if (lv > 0) {
+            group.sort((a, b) => {
+              const parentOrderA = prevLevelOrder.get(a.parentId) ?? Number.MAX_SAFE_INTEGER;
+              const parentOrderB = prevLevelOrder.get(b.parentId) ?? Number.MAX_SAFE_INTEGER;
+              if (parentOrderA !== parentOrderB) return parentOrderA - parentOrderB;
+
+              const parentA = nodeMap[a.parentId];
+              const parentB = nodeMap[b.parentId];
+              const parentCenterA = parentA ? (parentA.x + parentA.w / 2) : 0;
+              const parentCenterB = parentB ? (parentB.x + parentB.w / 2) : 0;
+              if (parentCenterA !== parentCenterB) return parentCenterA - parentCenterB;
+
+              const lineA = a.data?.callLine ?? a.data?.line ?? -1;
+              const lineB = b.data?.callLine ?? b.data?.line ?? -1;
+              if (lineA !== lineB) return lineA - lineB;
+
+              const charA = a.data?.callCharacter ?? a.data?.character ?? -1;
+              const charB = b.data?.callCharacter ?? b.data?.character ?? -1;
+              if (charA !== charB) return charA - charB;
+
+              return String(a.label || '').localeCompare(String(b.label || ''));
+            });
+          }
+
+          let totalW = 0;
+          for (const n of group) totalW += n.w;
+          totalW += Math.max(0, group.length - 1) * G_SIBLING_GAP_X;
+          let xCur = (cw / 2) - (totalW / 2);
+
+          for (let i = 0; i < group.length; i++) {
+            group[i].x = xCur;
+            group[i].y = yOffset;
+            xCur += group[i].w + G_SIBLING_GAP_X;
+          }
+
+          const currentOrder = new Map();
+          for (let i = 0; i < group.length; i++) {
+            currentOrder.set(group[i].id, i);
+          }
+          prevLevelOrder = currentOrder;
+
+          yOffset -= levelMaxH[lv] + G_LEVEL_GAP_Y;
         }
-        xOffset += maxW + G_LEVEL_GAP_X;
+      } else {
+        // Position: X by level, Y spread vertically
+        let xOffset = 40;
+        let prevLevelOrder = new Map();
+        for (let lv = 0; lv <= maxLevel; lv++) {
+          const group = (byLevel[lv] || []).slice();
+
+          // Keep sibling ordering stable and independent from expansion order.
+          // Primary key: parent order from previous level, then parent y-center,
+          // then call-site position/name for deterministic ordering.
+          if (lv > 0) {
+            group.sort((a, b) => {
+              const parentOrderA = prevLevelOrder.get(a.parentId) ?? Number.MAX_SAFE_INTEGER;
+              const parentOrderB = prevLevelOrder.get(b.parentId) ?? Number.MAX_SAFE_INTEGER;
+              if (parentOrderA !== parentOrderB) return parentOrderA - parentOrderB;
+
+              const parentA = nodeMap[a.parentId];
+              const parentB = nodeMap[b.parentId];
+              const parentCenterA = parentA ? (parentA.y + parentA.h / 2) : 0;
+              const parentCenterB = parentB ? (parentB.y + parentB.h / 2) : 0;
+              if (parentCenterA !== parentCenterB) return parentCenterA - parentCenterB;
+
+              const lineA = a.data?.callLine ?? a.data?.line ?? -1;
+              const lineB = b.data?.callLine ?? b.data?.line ?? -1;
+              if (lineA !== lineB) return lineA - lineB;
+
+              const charA = a.data?.callCharacter ?? a.data?.character ?? -1;
+              const charB = b.data?.callCharacter ?? b.data?.character ?? -1;
+              if (charA !== charB) return charA - charB;
+
+              return String(a.label || '').localeCompare(String(b.label || ''));
+            });
+          }
+
+          let maxW = 0;
+          for (const n of group) {
+            if (n.w > maxW) maxW = n.w;
+          }
+          let totalH = 0;
+          for (const n of group) totalH += n.h;
+          totalH += (group.length - 1) * G_SIBLING_GAP_Y;
+          let yStart = (ch / 2) - (totalH / 2);
+          let yCur = yStart;
+          for (let i = 0; i < group.length; i++) {
+            group[i].x = xOffset;
+            group[i].y = yCur;
+            yCur += group[i].h + G_SIBLING_GAP_Y;
+          }
+
+          const currentOrder = new Map();
+          for (let i = 0; i < group.length; i++) {
+            currentOrder.set(group[i].id, i);
+          }
+          prevLevelOrder = currentOrder;
+
+          xOffset += maxW + G_LEVEL_GAP_X;
+        }
       }
 
       // Center the graph horizontally
@@ -1197,8 +1338,6 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       const accentColor = getComputedStyle(document.body).getPropertyValue('--vscode-panelTitle-activeBorder') || '#007acc';
       const nodeBg = getComputedStyle(document.body).getPropertyValue('--vscode-sideBarSectionHeader-background') || '#252526';
       const hoverBg = getComputedStyle(document.body).getPropertyValue('--vscode-list-hoverBackground') || 'rgba(255,255,255,0.05)';
-      const badgeBg = getComputedStyle(document.body).getPropertyValue('--vscode-badge-background') || '#4d4d4d';
-      const badgeFg = getComputedStyle(document.body).getPropertyValue('--vscode-badge-foreground') || '#fff';
       const funcColor = getComputedStyle(document.body).getPropertyValue('--vscode-symbolIcon-functionForeground') || '#dcdcaa';
 
       // Draw edges
@@ -1208,24 +1347,38 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         const from = nodeMap[e.from];
         const to = nodeMap[e.to];
         if (!from || !to) continue;
-        const x1 = from.x + from.w;
-        const y1 = from.y + from.h / 2;
-        const x2 = to.x;
-        const y2 = to.y + to.h / 2;
-        const cpx = (x1 + x2) / 2;
+        let x1, y1, x2, y2, cp1x, cp1y, cp2x, cp2y;
+        if (graphDirection === 'up') {
+          x1 = from.x + from.w / 2;
+          y1 = from.y;
+          x2 = to.x + to.w / 2;
+          y2 = to.y + to.h;
+          const cpy = (y1 + y2) / 2;
+          cp1x = x1; cp1y = cpy;
+          cp2x = x2; cp2y = cpy;
+        } else {
+          x1 = from.x + from.w;
+          y1 = from.y + from.h / 2;
+          x2 = to.x;
+          y2 = to.y + to.h / 2;
+          const cpx = (x1 + x2) / 2;
+          cp1x = cpx; cp1y = y1;
+          cp2x = cpx; cp2y = y2;
+        }
+
         ctx.beginPath();
         ctx.moveTo(x1, y1);
-        ctx.bezierCurveTo(cpx, y1, cpx, y2, x2, y2);
+        ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x2, y2);
         ctx.stroke();
 
         // Arrow head
         const arrowSize = 5;
-        const angle = Math.atan2(y2 - (y1 + y2) / 2, x2 - cpx);
+        const finalAngle = graphDirection === 'up' ? -Math.PI / 2 : 0;
         ctx.beginPath();
         ctx.moveTo(x2, y2);
-        ctx.lineTo(x2 - arrowSize * Math.cos(angle - 0.4), y2 - arrowSize * Math.sin(angle - 0.4));
+        ctx.lineTo(x2 - arrowSize * Math.cos(finalAngle - 0.4), y2 - arrowSize * Math.sin(finalAngle - 0.4));
         ctx.moveTo(x2, y2);
-        ctx.lineTo(x2 - arrowSize * Math.cos(angle + 0.4), y2 - arrowSize * Math.sin(angle + 0.4));
+        ctx.lineTo(x2 - arrowSize * Math.cos(finalAngle + 0.4), y2 - arrowSize * Math.sin(finalAngle + 0.4));
         ctx.stroke();
       }
 
@@ -1234,13 +1387,12 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       const font = fontSize + 'px ' + getComputedStyle(document.body).fontFamily;
       for (const n of gNodes) {
         const isHover = gHover === n.id;
-        const isRoot = n.id === '__root__';
 
         // Node shape: all use rounded rectangle, kind distinguished by prefix icon
         const kindBorderColor = nodeKindColor(n.kind) || dimColor;
         ctx.fillStyle = isHover ? (hoverBg.includes('rgba') ? 'rgba(255,255,255,0.1)' : hoverBg) : nodeBg;
-        ctx.strokeStyle = isRoot ? accentColor : (isHover ? accentColor : kindBorderColor);
-        ctx.lineWidth = isRoot ? 2.5 : 1.5;
+        ctx.strokeStyle = isHover ? accentColor : kindBorderColor;
+        ctx.lineWidth = isHover ? 2 : 1.5;
         const ncx = n.x + n.w / 2, ncy = n.y + n.h / 2;
         const r = 5;
         ctx.beginPath();
@@ -1261,8 +1413,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         if (n.loading) {
           ctx.strokeStyle = accentColor;
           ctx.lineWidth = 2;
-          const cx = n.x + n.w + 10;
-          const cy = n.y + n.h / 2;
+          const cx = graphDirection === 'up' ? (n.x + n.w / 2) : (n.x + n.w + 10);
+          const cy = graphDirection === 'up' ? (n.y - 10) : (n.y + n.h / 2);
           const t = (Date.now() % 1000) / 1000 * Math.PI * 2;
           ctx.beginPath();
           ctx.arc(cx, cy, 5, t, t + Math.PI * 1.2);
@@ -1272,22 +1424,6 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
           }
         }
 
-        // Expand indicator (small +/- badge)
-        if (n.id !== '__root__' && !n.data?.nodeId?.startsWith('leaf_')) {
-          const badgeR = 6;
-          const bx = n.x + n.w + 2;
-          const by = n.y + n.h / 2;
-          ctx.fillStyle = badgeBg;
-          ctx.beginPath();
-          ctx.arc(bx, by, badgeR, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillStyle = badgeFg;
-          ctx.font = 'bold 10px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText(n.expanded ? '−' : '+', bx, by);
-        }
-
         // Kind badge + label (centered, single row)
         const hasMultiCS = n.callSites && n.callSites.length > 1;
         const labelY = hasMultiCS ? (n.y + G_NODE_H / 2) : ncy;
@@ -1295,7 +1431,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         const badgeW    = 14;
         const badgeH    = 14;
         const badgeGap  = 5;
-        const drawFont  = isRoot ? ('bold ' + font) : font;
+        const drawFont  = font;
         ctx.font = drawFont;
         const rawLabel  = stripParams(n.label);
         const textW     = gTextWidth(rawLabel, drawFont);
@@ -1318,7 +1454,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
 
         // Label text
         ctx.font = drawFont;
-        ctx.fillStyle = isRoot ? accentColor : (nodeKindColor(n.kind) || funcColor);
+        ctx.fillStyle = nodeKindColor(n.kind) || funcColor;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
         ctx.fillText(rawLabel, startX + badgeW + badgeGap, labelY);
@@ -1426,6 +1562,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         gEdges.push({ from: parentNodeId, to: nid });
       }
 
+      // Restore previously expanded descendants (if parent was collapsed earlier).
+      restoreGraphExpansions();
       graphLayout();
       graphDraw();
     }
@@ -1448,11 +1586,9 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       gEdges = gEdges.filter(e => !toRemove.has(e.from) && !toRemove.has(e.to));
       node.children = [];
       node.expanded = false;
+      // Keep descendant expansion state so re-expanding this node can restore
+      // previously opened descendants from cache.
       expandedNodeIds.delete(node.id);
-      for (const rid of toRemove) {
-        loadedNodes.delete(rid);
-        expandedNodeIds.delete(rid);
-      }
     }
 
     // ── Canvas interactions ──────────────────────────────────────────────
@@ -1518,7 +1654,6 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
 
       // Ctrl+click: expand/collapse
       if (e.ctrlKey || e.metaKey) {
-        if (hit.id === '__root__') return;
         if (hit.data && hit.data.nodeId && hit.data.nodeId.startsWith('leaf_')) return;
 
         if (hit.expanded) {
@@ -1532,6 +1667,9 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
             graphHandleChildren(hit.id, cached);
             expandedNodeIds.add(hit.id);
             loadedNodes.add(hit.id);
+            restoreGraphExpansions();
+            graphLayout();
+            graphDraw();
             return;
           }
           if (loadedNodes.has(hit.id)) return;
@@ -1571,7 +1709,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
 
     // Resize observer for canvas
     const resizeObs = new ResizeObserver(() => {
-      if (viewMode === 'graph' && lastUpdateData) {
+      if (isGraphMode(viewMode) && lastUpdateData) {
         graphLayout();
         graphDraw();
       }
