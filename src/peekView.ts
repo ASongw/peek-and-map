@@ -582,6 +582,12 @@ export class PeekViewProvider implements vscode.WebviewViewProvider {
       white-space: nowrap;
       flex: 1;
     }
+    #symbol-name .owner {
+      color: var(--peek-qualified-owner, var(--peek-kind-Class, var(--vscode-symbolIcon-classForeground, var(--vscode-editor-foreground, #d4d4d4))));
+    }
+    #symbol-name .scope-op {
+      color: var(--peek-operator, var(--vscode-editor-foreground, #d4d4d4));
+    }
 
     #file-name {
       font-size: 13px;
@@ -807,7 +813,26 @@ export class PeekViewProvider implements vscode.WebviewViewProvider {
       const color = kindColor(kind);
       kindBadge.style.color           = color || 'var(--vscode-foreground, #ccc)';
       kindBadge.style.backgroundColor = color ? hexToRgba(color, 0.18) : 'var(--vscode-badge-background, rgba(100,100,100,0.25))';
-      symbolNameEl.style.color        = color || 'var(--vscode-editor-foreground, #d4d4d4)';
+      symbolNameEl.style.color        = '';
+    }
+
+    function splitQualifiedName(name) {
+      const s = (name || '').trim();
+      const idx = s.lastIndexOf('::');
+      if (idx <= 0 || idx + 2 >= s.length) return null;
+      return { owner: s.slice(0, idx), member: s.slice(idx + 2) };
+    }
+
+    function renderHeaderSymbolName(name, symbolKind) {
+      const part = splitQualifiedName(name || '');
+      const kindKey = symbolKind === 'Ctor' ? 'Constructor' : (symbolKind || 'Function');
+      const memberColor = kindColor(kindKey) || 'var(--vscode-editor-foreground, #d4d4d4)';
+      if (!part) {
+        return '<span style="color:' + memberColor + '">' + escapeHtml(name || '') + '</span>';
+      }
+      return '<span class="owner">' + escapeHtml(part.owner) + '</span>'
+        + '<span class="scope-op">::</span>'
+        + '<span style="color:' + memberColor + '">' + escapeHtml(part.member) + '</span>';
     }
 
     // ── 接收来自扩展的消息 ────────────────────────────────────────────────────
@@ -847,7 +872,7 @@ export class PeekViewProvider implements vscode.WebviewViewProvider {
         currentDefUri     = defUri || null;
 
         kindBadge.textContent    = kindSymbol(symbolKind);
-        symbolNameEl.textContent = symbolName;
+        symbolNameEl.innerHTML = renderHeaderSymbolName(symbolName, symbolKind);
         currentSymbolKind = symbolKind;
         applyKindColors(symbolKind);
         document.getElementById('file-name').textContent = fileName ? '  ' + fileName + ':' + (cursorLine + 1) : '';

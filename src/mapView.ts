@@ -3,7 +3,7 @@ import * as path from 'path';
 import { TreeNodeData } from './types';
 import { getNonce } from './utils';
 import { PeekViewProvider } from './peekView';
-import { generateSymbolKindCss } from './theme';
+import { generateThemeTokenCss, generateSymbolKindCss } from './theme';
 
 export class MapViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'mapView.view';
@@ -33,7 +33,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
   /** Push current theme symbol-kind colors to the webview. */
   pushThemeColors(): void {
     if (!this._view) { return; }
-    this._view.webview.postMessage({ type: 'themeColors', css: generateSymbolKindCss() });
+    this._view.webview.postMessage({ type: 'themeColors', css: generateThemeTokenCss() + generateSymbolKindCss() });
   }
 
   resolveWebviewView(
@@ -687,7 +687,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     }
   </style>
   <!-- Dynamic theme symbol-kind colors (updated via postMessage on theme change) -->
-  <style id="theme-tokens">${generateSymbolKindCss()}</style>
+  <style id="theme-tokens">${generateThemeTokenCss() + generateSymbolKindCss()}</style>
 </head>
 <body>
   <div id="header">
@@ -896,6 +896,30 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       return idx > 0 ? name.substring(0, idx) : name;
     }
 
+    function splitQualifiedName(name) {
+      const clean = stripParams(name || '');
+      const idx = clean.lastIndexOf('::');
+      if (idx <= 0 || idx + 2 >= clean.length) return null;
+      return {
+        owner: clean.slice(0, idx),
+        member: clean.slice(idx + 2),
+      };
+    }
+
+    function renderQualifiedNameHtml(name, memberKind) {
+      const part = splitQualifiedName(name);
+      const kindKey = memberKind === 'Ctor' ? 'Constructor' : (memberKind || 'Function');
+      const memberColor = 'var(--peek-kind-' + kindKey + ',var(--vscode-symbolIcon-functionForeground,#dcdcaa))';
+      if (!part) {
+        return '<span style="color:' + memberColor + '">' + escapeHtml(stripParams(name || '')) + '</span>';
+      }
+      const ownerColor = 'var(--peek-qualified-owner,var(--peek-kind-Class,var(--vscode-symbolIcon-classForeground,var(--vscode-editor-foreground,#d4d4d4))))';
+      const sepColor = 'var(--peek-operator,var(--vscode-editor-foreground,#d4d4d4))';
+      return '<span style="color:' + ownerColor + '">' + escapeHtml(part.owner) + '</span>'
+        + '<span style="color:' + sepColor + '">::</span>'
+        + '<span style="color:' + memberColor + '">' + escapeHtml(part.member) + '</span>';
+    }
+
     function renderTreeList(container, items, depth) {
       if (!items || items.length === 0) {
         container.innerHTML = '<div class="section-empty">No results</div>';
@@ -909,6 +933,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     function renderTreeNodeHtml(item, depth) {
       const pad = depth * 16;
       const isLeaf = item.nodeId.startsWith('leaf_');
+      const nameHtml = renderQualifiedNameHtml(item.label, item.kind || 'Function');
       const kindHtml = item.kind
         ? '<span class="item-icon" style="color:var(--peek-kind-' + (item.kind === 'Ctor' ? 'Constructor' : item.kind) + ',var(--vscode-foreground,#ccc));background-color:color-mix(in srgb,var(--peek-kind-' + (item.kind === 'Ctor' ? 'Constructor' : item.kind) + ',transparent) 18%,transparent)">' + kindSymbol(item.kind) + '</span>'
         : '';
@@ -924,7 +949,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         + '<div class="col-name" style="padding-left:' + (pad + 4) + 'px">'
         + '<span class="tree-toggle">' + toggleChar + '</span>'
         + kindHtml
-        + '<span class="item-name" style="color:var(--peek-kind-' + (item.kind === 'Ctor' ? 'Constructor' : (item.kind || 'Function')) + ',var(--vscode-symbolIcon-functionForeground,#dcdcaa))">' + escapeHtml(stripParams(item.label)) + '</span>'
+        + '<span class="item-name">' + nameHtml + '</span>'
         + '</div>'
         + '<div class="col-file" title="' + escapeAttr(item.detail) + '">' + escapeHtml(item.detail) + '</div>'
         + '<div class="col-line">' + (callLine + 1) + '</div>'
@@ -1630,7 +1655,14 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         const drawFont  = font;
         ctx.font = drawFont;
         const rawLabel  = stripParams(n.label);
-        const textW     = gTextWidth(rawLabel, drawFont);
+        const qn = splitQualifiedName(rawLabel);
+        const ownerText = qn ? qn.owner : '';
+        const memberText = qn ? qn.member : rawLabel;
+        const sepText = qn ? '::' : '';
+        const ownerW = ownerText ? gTextWidth(ownerText, drawFont) : 0;
+        const sepW = sepText ? gTextWidth(sepText, drawFont) : 0;
+        const memberW = gTextWidth(memberText, drawFont);
+        const textW = ownerW + sepW + memberW;
         const totalW    = badgeW + badgeGap + textW;
         const startX    = ncx - totalW / 2;
 
@@ -1650,10 +1682,24 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
 
         // Label text
         ctx.font = drawFont;
-        ctx.fillStyle = ensureReadableColor(rawKindColor, nodeFill, fg, 3.0);
+        const ownerRawColor = cssVar(styles, '--peek-qualified-owner', cssVar(styles, '--peek-kind-Class', fg));
+        const sepRawColor = cssVar(styles, '--peek-operator', fg);
+        const memberColor = ensureReadableColor(rawKindColor, nodeFill, fg, 3.0);
+        const ownerColor = ensureReadableColor(ownerRawColor, nodeFill, fg, 3.0);
+        const sepColor = ensureReadableColor(sepRawColor, nodeFill, fg, 3.0);
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillText(rawLabel, startX + badgeW + badgeGap, labelY);
+        let textX = startX + badgeW + badgeGap;
+        if (ownerText) {
+          ctx.fillStyle = ownerColor;
+          ctx.fillText(ownerText, textX, labelY);
+          textX += ownerW;
+          ctx.fillStyle = sepColor;
+          ctx.fillText('::', textX, labelY);
+          textX += sepW;
+        }
+        ctx.fillStyle = memberColor;
+        ctx.fillText(memberText, textX, labelY);
 
         // ── Call-site line-number badges (only for merged nodes) ──────────
         n._callBadgeRects = [];
