@@ -1100,6 +1100,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
 
     const G_NODE_H = 32;
     const G_CALL_ROW_H = 16;  // extra height per call-site badge row
+    const G_CALLS_PER_ROW = 5;
     const G_PAD_X = 12;
     const G_PAD_Y = 4;
     const G_LEVEL_GAP_X = 60;
@@ -1353,14 +1354,20 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         // Multi-callsite: compute badge row width
         const cs = n.callSites;
         if (cs && cs.length > 1) {
-          let badgesW = G_PAD_X; // left padding
-          for (let si = 0; si < cs.length; si++) {
-            const txt = 'L' + (cs[si].callLine + 1);
-            badgesW += gTextWidth(txt, callFont) + 8 + 4; // 8=pad, 4=gap
+          let maxBadgesRowW = 0;
+          for (let rowStart = 0; rowStart < cs.length; rowStart += G_CALLS_PER_ROW) {
+            const rowEnd = Math.min(cs.length, rowStart + G_CALLS_PER_ROW);
+            let rowW = G_PAD_X; // left padding
+            for (let si = rowStart; si < rowEnd; si++) {
+              const txt = 'L' + (cs[si].callLine + 1);
+              rowW += gTextWidth(txt, callFont) + 8 + 4; // 8=pad, 4=gap
+            }
+            rowW += G_PAD_X - 4; // right padding minus last gap
+            if (rowW > maxBadgesRowW) { maxBadgesRowW = rowW; }
           }
-          badgesW += G_PAD_X - 4; // right padding minus last gap
-          if (badgesW > baseW) baseW = badgesW;
-          n.h = G_NODE_H + G_CALL_ROW_H;
+          if (maxBadgesRowW > baseW) { baseW = maxBadgesRowW; }
+          const rowCount = Math.ceil(cs.length / G_CALLS_PER_ROW);
+          n.h = G_NODE_H + rowCount * G_CALL_ROW_H;
         } else {
           n.h = G_NODE_H;
         }
@@ -1708,33 +1715,37 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
           const cFont = '10px ' + getComputedStyle(document.body).fontFamily;
           ctx.font = cFont;
           const badgeRowY = n.y + G_NODE_H;
-          let bx = n.x + G_PAD_X;
-          for (let si = 0; si < cs.length; si++) {
-            const txt = 'L' + (cs[si].callLine + 1);
-            const tw = ctx.measureText(txt).width;
-            const bw = tw + 8;
-            const bh = 13;
-            const by = badgeRowY + (G_CALL_ROW_H - bh) / 2;
+          for (let rowStart = 0; rowStart < cs.length; rowStart += G_CALLS_PER_ROW) {
+            const rowEnd = Math.min(cs.length, rowStart + G_CALLS_PER_ROW);
+            let bx = n.x + G_PAD_X;
+            for (let si = rowStart; si < rowEnd; si++) {
+              const txt = 'L' + (cs[si].callLine + 1);
+              const tw = ctx.measureText(txt).width;
+              const bw = tw + 8;
+              const bh = 13;
+              const rowIndex = Math.floor(si / G_CALLS_PER_ROW);
+              const by = badgeRowY + rowIndex * G_CALL_ROW_H + (G_CALL_ROW_H - bh) / 2;
 
-            // Highlight hovered badge
-            const isHot = (gHover === n.id && gHoverCallSite === si);
+              // Highlight hovered badge
+              const isHot = (gHover === n.id && gHoverCallSite === si);
 
-            // Badge background
-            ctx.fillStyle = isHot ? colorToRgba(accentColor, 0.35) : colorToRgba(dimColor, 0.18);
-            ctx.beginPath();
-            ctx.roundRect(bx, by, bw, bh, 2);
-            ctx.fill();
+              // Badge background
+              ctx.fillStyle = isHot ? colorToRgba(accentColor, 0.35) : colorToRgba(dimColor, 0.18);
+              ctx.beginPath();
+              ctx.roundRect(bx, by, bw, bh, 2);
+              ctx.fill();
 
-            // Badge text
-            ctx.fillStyle = isHot
-              ? ensureReadableColor(accentColor, nodeFill, fg, 3.0)
-              : ensureReadableColor(dimColor, nodeFill, fg, 3.0);
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(txt, bx + bw / 2, by + bh / 2);
+              // Badge text
+              ctx.fillStyle = isHot
+                ? ensureReadableColor(accentColor, nodeFill, fg, 3.0)
+                : ensureReadableColor(dimColor, nodeFill, fg, 3.0);
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(txt, bx + bw / 2, by + bh / 2);
 
-            n._callBadgeRects.push({ x: bx, y: by, w: bw, h: bh, idx: si });
-            bx += bw + 4;
+              n._callBadgeRects.push({ x: bx, y: by, w: bw, h: bh, idx: si });
+              bx += bw + 4;
+            }
           }
         }
       }
