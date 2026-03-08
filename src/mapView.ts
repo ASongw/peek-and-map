@@ -141,12 +141,27 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       }
     } catch { /* no call hierarchy provider */ }
 
+    // Resolve current symbol + optional owning class for root label
+    let rootLabel = word;
+    try {
+      const symbols = await this._getDocumentSymbols(doc.uri);
+      const found = this._deepestContainingWithAncestors(symbols, queryPos);
+      if (found) {
+        const ownerClass =
+          this._nearestOwnerClassName(found.ancestors) ??
+          this._inferCppOwnerClass(found.symbol.name, doc.lineAt(found.symbol.selectionRange.start.line).text, doc.languageId);
+        rootLabel = this._formatLabelWithOwner(found.symbol.name, ownerClass, found.symbol.kind);
+      }
+    } catch {
+      // keep fallback word
+    }
+
     this._view.webview.postMessage({
       type: 'update',
       data: {
         rootNode: {
           nodeId: '__root__',
-          label: word,
+          label: rootLabel,
           detail: this._relativePath(doc.uri.fsPath, wsRoot),
           line: queryPos.line,
           character: queryPos.character,
@@ -234,9 +249,19 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         ? this._allocRefNodeId(loc.uri, symStart)
         : `leaf_${++this._nodeCounter}`;
 
+      const found =
+        this._findBySelectionStartWithAncestors(symbols, symStart) ??
+        this._deepestContainingWithAncestors(symbols, loc.range.start);
+      const ownerClass = found
+        ? (
+          this._nearestOwnerClassName(found.ancestors) ??
+          this._inferCppOwnerClass(enclosing.name, refDoc.lineAt(symStart.line).text, refDoc.languageId)
+        )
+        : this._inferCppOwnerClass(enclosing.name, refDoc.lineAt(symStart.line).text, refDoc.languageId);
+
       result.push({
         nodeId,
-        label: enclosing.name,
+        label: this._formatLabelWithOwner(enclosing.name, ownerClass, enclosing.kind),
         detail: this._relativePath(loc.uri.fsPath, wsRoot),
         line: symStart.line,
         character: symStart.character,
@@ -294,6 +319,91 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       }
     }
     return best;
+  }
+
+  private _deepestContainingWithAncestors(
+    symbols: vscode.DocumentSymbol[],
+    pos: vscode.Position,
+    ancestors: vscode.DocumentSymbol[] = []
+  ): { symbol: vscode.DocumentSymbol; ancestors: vscode.DocumentSymbol[] } | undefined {
+    let best: { symbol: vscode.DocumentSymbol; ancestors: vscode.DocumentSymbol[] } | undefined;
+    for (const sym of symbols) {
+      if (!sym.range.contains(pos)) { continue; }
+      const nextAncestors = [...ancestors, sym];
+      const child = this._deepestContainingWithAncestors(sym.children, pos, nextAncestors);
+      const candidate = child ?? { symbol: sym, ancestors: nextAncestors };
+      if (!best || this._rangeSize(candidate.symbol.range) < this._rangeSize(best.symbol.range)) {
+        best = candidate;
+      }
+    }
+    return best;
+  }
+
+  private _findBySelectionStartWithAncestors(
+    symbols: vscode.DocumentSymbol[],
+    selectionStart: vscode.Position,
+    ancestors: vscode.DocumentSymbol[] = []
+  ): { symbol: vscode.DocumentSymbol; ancestors: vscode.DocumentSymbol[] } | undefined {
+    for (const sym of symbols) {
+      const nextAncestors = [...ancestors, sym];
+      if (
+        sym.selectionRange.start.line === selectionStart.line &&
+        sym.selectionRange.start.character === selectionStart.character
+      ) {
+        return { symbol: sym, ancestors: nextAncestors };
+      }
+      const child = this._findBySelectionStartWithAncestors(sym.children, selectionStart, nextAncestors);
+      if (child) { return child; }
+    }
+    return undefined;
+  }
+
+  private _nearestOwnerClassName(ancestors: vscode.DocumentSymbol[]): string | undefined {
+    for (let i = ancestors.length - 2; i >= 0; i--) {
+      const k = ancestors[i].kind;
+      if (k === vscode.SymbolKind.Class || k === vscode.SymbolKind.Struct || k === vscode.SymbolKind.Interface) {
+        return ancestors[i].name;
+      }
+    }
+    return undefined;
+  }
+
+  private _inferCppOwnerClass(name: string, lineText: string, languageId: string): string | undefined {
+    if (!this._isCppLanguage(languageId)) { return undefined; }
+
+    const fromName = this._ownerFromQualifiedName(name);
+    if (fromName) { return fromName; }
+
+    const simpleName = this._simpleSymbolName(name);
+    const m = lineText.match(/([~A-Za-z_][\w:]*)\s*::\s*([~A-Za-z_]\w*)\s*\(/);
+    if (!m) { return undefined; }
+    const methodName = m[2];
+    if (!simpleName || methodName === simpleName || methodName === `~${simpleName}`) {
+      return m[1];
+    }
+    return undefined;
+  }
+
+  private _isCppLanguage(languageId: string): boolean {
+    return languageId === 'cpp' || languageId === 'c' || languageId === 'cuda-cpp' || languageId === 'objective-cpp';
+  }
+
+  private _ownerFromQualifiedName(name: string): string | undefined {
+    const noParams = name.replace(/\(.*$/, '').trim();
+    const idx = noParams.lastIndexOf('::');
+    if (idx <= 0) { return undefined; }
+    return noParams.slice(0, idx).trim() || undefined;
+  }
+
+  private _simpleSymbolName(name: string): string {
+    const noParams = name.replace(/\(.*$/, '').trim();
+    const idx = noParams.lastIndexOf('::');
+    return idx >= 0 ? noParams.slice(idx + 2) : noParams;
+  }
+
+  private _formatLabelWithOwner(name: string, ownerClass: string | undefined, _kind: vscode.SymbolKind): string {
+    if (!ownerClass) { return name; }
+    return `${ownerClass}::${name}`;
   }
 
   private _rangeSize(r: vscode.Range): number {
