@@ -1550,6 +1550,48 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
+    function graphRelayoutKeepView(anchorNodeId, mutateGraphFn) {
+      const prevZoom = gZoom;
+      const prevPan = { x: gPan.x, y: gPan.y };
+      const cw = graphContainer.clientWidth;
+      const ch = graphContainer.clientHeight;
+
+      let anchorScreen = null;
+      if (anchorNodeId) {
+        const before = gNodes.find(n => n.id === anchorNodeId);
+        if (before) {
+          const ax = before.x + before.w / 2;
+          const ay = before.y + before.h / 2;
+          anchorScreen = {
+            x: prevPan.x + ax * prevZoom,
+            y: prevPan.y + ay * prevZoom,
+          };
+        }
+      }
+
+      const focusWorldX = (cw / 2 - prevPan.x) / prevZoom;
+      const focusWorldY = (ch / 2 - prevPan.y) / prevZoom;
+
+      mutateGraphFn();
+      graphLayout();
+
+      gZoom = prevZoom;
+
+      if (anchorNodeId && anchorScreen) {
+        const after = gNodes.find(n => n.id === anchorNodeId);
+        if (after) {
+          const ax = after.x + after.w / 2;
+          const ay = after.y + after.h / 2;
+          gPan.x = anchorScreen.x - ax * gZoom;
+          gPan.y = anchorScreen.y - ay * gZoom;
+          return;
+        }
+      }
+
+      gPan.x = cw / 2 - focusWorldX * gZoom;
+      gPan.y = ch / 2 - focusWorldY * gZoom;
+    }
+
     /* Draw */
     function graphDraw() {
       const dpr = window.devicePixelRatio || 1;
@@ -1857,33 +1899,34 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
-      parent.expanded = true;
-      const merged = mergeItemsBySymbol(items);
-      for (const mg of merged) {
-        const item = mg.primary;
-        const nid = item.nodeId;
-        if (nodeMap[nid]) continue; // avoid duplicates
-        gNodes.push({
-          id: nid,
-          label: item.label,
-          kind: item.kind || '',
-          x: 0, y: 0, w: 0, h: G_NODE_H,
-          children: [],
-          expanded: false,
-          loading: false,
-          data: item,
-          parentId: parentNodeId,
-          callSites: mg.callSites,
-          _callBadgeRects: [],
-          _toggleRect: null,
-        });
-        parent.children.push(nid);
-        gEdges.push({ from: parentNodeId, to: nid });
-      }
+      graphRelayoutKeepView(parentNodeId, () => {
+        parent.expanded = true;
+        const merged = mergeItemsBySymbol(items);
+        for (const mg of merged) {
+          const item = mg.primary;
+          const nid = item.nodeId;
+          if (nodeMap[nid]) continue; // avoid duplicates
+          gNodes.push({
+            id: nid,
+            label: item.label,
+            kind: item.kind || '',
+            x: 0, y: 0, w: 0, h: G_NODE_H,
+            children: [],
+            expanded: false,
+            loading: false,
+            data: item,
+            parentId: parentNodeId,
+            callSites: mg.callSites,
+            _callBadgeRects: [],
+            _toggleRect: null,
+          });
+          parent.children.push(nid);
+          gEdges.push({ from: parentNodeId, to: nid });
+        }
 
-      // Restore previously expanded descendants (if parent was collapsed earlier).
-      restoreGraphExpansions();
-      graphLayout();
+        // Restore previously expanded descendants (if parent was collapsed earlier).
+        restoreGraphExpansions();
+      });
       graphDraw();
     }
 
@@ -1980,8 +2023,9 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
 
       if (graphHitTestToggle(hit, cx, cy)) {
         if (hit.expanded) {
-          graphCollapse(hit);
-          graphLayout();
+          graphRelayoutKeepView(hit.id, () => {
+            graphCollapse(hit);
+          });
           graphDraw();
         } else {
           // Re-expand from cache if available
@@ -1990,9 +2034,6 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
             graphHandleChildren(hit.id, cached);
             expandedNodeIds.add(hit.id);
             loadedNodes.add(hit.id);
-            restoreGraphExpansions();
-            graphLayout();
-            graphDraw();
             return;
           }
           if (loadedNodes.has(hit.id)) return;
