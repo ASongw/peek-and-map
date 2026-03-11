@@ -2,7 +2,7 @@
   "name": "peek-and-map",
   "displayName": "Peek and Map",
   "description": "Provide two views to peek definition and map relationship",
-  "version": "1.2.2",
+  "version": "1.2.5",
   "publisher": "asong",
   "icon": "media/icon.png",
   "license": "MIT",
@@ -86,6 +86,20 @@
           "minimum": 0,
           "maximum": 500,
           "description": "在符号定义体上下额外显示的行数（范围 0–500；方便查看更多上下文）"
+        },
+        "mapView.wheelPanSensitivity": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0.05,
+          "maximum": 5,
+          "description": "Map 图形视图中鼠标滚轮滚动平移灵敏度（范围0.05-5 默认值 1）"
+        },
+        "mapView.wheelTiltPanSensitivity": {
+          "type": "number",
+          "default": 0.3,
+          "minimum": 0.05,
+          "maximum": 5,
+          "description": "Map 图形视图中鼠标滚轮左右拨动平移灵敏度（范围0.05-5 默认值 0.3）"
         }
       }
     }

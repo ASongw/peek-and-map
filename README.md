@@ -36,7 +36,7 @@
 | **双模式视图切换** | 使用 `Outline` / `Graph` 标签切换视图；`Graph` 模式支持方向选择（`Right` / `Left` / `Up` / `Down`） |
 | **图形视图（Graph）** | 图形视图以 BFS 树布局展示符号关系，Bezier 曲线连边；节点统一为圆角矩形，通过**符号名前的彩色 Emoji 图标**（💿 Function、📀 Method、📱 Class、🔗 Interface、🔷 Variable、⭐ Constant、🟢 Property、🟠 Field、🏷️ Enum、📦 Module、📃 Namespace、💲 Struct、📲 Constructor、📄 File、◎ Global）区分对象类型，图标与边框颜色一致，无背景底板 |
 | **图形视图节点合并**         | 当同一符号在多处引用目标符号时，图形视图中自动将重复的节点合并为一个，节点内部以行号徽章（如 `L10` `L20` `L30`）展示所有调用位置；单击/双击不同行号徽章分别触发预览/跳转到对应的调用位置，与树形视图中对应节点的行为一致 |
-| **图形视图交互**           | 单击节点在 Peek View 中预览（preserveFocus）、双击在编辑器中打开、点击节点侧边 `+/-` 按钮展开/折叠子节点、滚轮缩放、拖拽平移；等待动画显示在节点延伸方向（上/下/左/右） |
+| **图形视图交互**           | 单击节点在 Peek View 中预览（preserveFocus）、双击在编辑器中打开、点击节点侧边 `+/-` 按钮展开/折叠子节点、拖拽平移；滚轮默认上下平移，`Shift+滚轮` 左右平移，鼠标滚轮左右拨动可左右平移，`Ctrl+滚轮` 缩放；等待动画显示在节点延伸方向（上/下/左/右） |
 | **视图状态持久化** | Map 视图会保存并恢复上次状态：`Outline/Graph` 模式以及 Graph 的方向设置（Right/Left/Up/Down） |
 | **折叠状态恢复**           | 折叠靠近根部节点时会保留其后代展开状态；重新展开后自动恢复已展开子节点 |
 
@@ -49,6 +49,8 @@
 | `peekView.fontSize`             | number  | 13     | Peek 视图字体大小（px）                                                                                                              |
 | `peekView.highlightCurrentLine` | boolean | true   | 是否高亮光标所在行                                                                                                                   |
 | `peekView.contextPadding`       | number  | 30     | 在符号定义体**上方和下方**各额外显示的行数（范围 0–500）；<br />设置大范围方便查看更多上下文，设置0则是仅显示选中的符号定义； |
+| `mapView.wheelPanSensitivity`   | number  | 1      | Map 图形视图中滚轮滚动平移灵敏度（普通滚轮上下平移与 `Shift+滚轮` 左右平移） |
+| `mapView.wheelTiltPanSensitivity` | number | 0.28   | Map 图形视图中鼠标滚轮左右拨动（水平滚轮）平移灵敏度 |
 
 ---
 
@@ -69,7 +71,7 @@ TypeScript · JavaScript · TSX · JSX · Python · Java · C · C++ · C# · Go
 ---
 
 ## TODO
-- map视图不再根据编辑器主题变化，只提供视觉效果较好的明亮/黑暗两套配色；
+- map视图考虑不再根据编辑器主题变化，只提供视觉效果较好的明亮/黑暗两套配色；
 
 ---
 

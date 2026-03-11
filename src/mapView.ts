@@ -73,6 +73,24 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     this._view.webview.postMessage({ type: 'themeColors', css: generateThemeTokenCss() + generateSymbolKindCss() });
   }
 
+  /** Push map interaction sensitivities to the webview. */
+  pushInteractionConfig(): void {
+    if (!this._view) { return; }
+    this._view.webview.postMessage({
+      type: 'interactionConfig',
+      wheelPanSensitivity: this._getConfigNumber('wheelPanSensitivity', 1, 0.05, 5),
+      wheelTiltPanSensitivity: this._getConfigNumber('wheelTiltPanSensitivity', 0.28, 0.05, 5),
+    });
+  }
+
+  private _getConfigNumber(key: string, fallback: number, min: number, max: number): number {
+    const raw = vscode.workspace.getConfiguration('mapView').get<number>(key, fallback);
+    if (typeof raw !== 'number' || Number.isNaN(raw)) {
+      return fallback;
+    }
+    return Math.max(min, Math.min(max, raw));
+  }
+
   resolveWebviewView(
     webviewView: vscode.WebviewView,
     _context: vscode.WebviewViewResolveContext,
@@ -91,6 +109,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       switch (msg.type) {
         case 'ready':
           this.pushThemeColors();
+          this.pushInteractionConfig();
           webviewView.webview.postMessage({
             type: 'initViewState',
             mode: this._viewMode,
@@ -828,7 +847,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
   </div>
   <div id="graph-container">
     <canvas id="graph-canvas"></canvas>
-    <div id="graph-hint">Click = peek · Double-click = open &amp; peek · +/- icon = expand/collapse · Scroll = zoom · Drag = pan</div>
+    <div id="graph-hint">Click = peek · Double-click = open &amp; peek · +/- icon = expand/collapse · Scroll = pan · Shift+Scroll/tilt = pan left/right · Ctrl+Scroll = zoom · Drag = pan</div>
   </div>
 
   <script nonce="${nonce}">
@@ -944,6 +963,12 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         document.getElementById('theme-tokens').textContent = msg.css;
         // Redraw graph in case it's visible, so node border colors update
         if (isGraphMode(viewMode) && lastUpdateData) { graphDraw(); }
+        return;
+      }
+
+      if (msg.type === 'interactionConfig') {
+        gWheelPanSensitivity = clampSensitivity(msg.wheelPanSensitivity, 1);
+        gWheelTiltPanSensitivity = clampSensitivity(msg.wheelTiltPanSensitivity, 0.28);
         return;
       }
 
@@ -1243,6 +1268,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     let gAnimFrame = null;
     let gLayoutAnimFrame = null;
     let gCollapseAnimFrame = null;
+    let gWheelPanSensitivity = 1;
+    let gWheelTiltPanSensitivity = 0.28;
 
     const G_NODE_H = 24;
     const G_CALL_ROW_H = 14;  // extra height per call-site badge row
@@ -1481,6 +1508,12 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     function cssVar(styles, name, fallback) {
       const v = (styles.getPropertyValue(name) || '').trim();
       return v || fallback;
+    }
+
+    function clampSensitivity(value, fallback) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) { return fallback; }
+      return Math.max(0.05, Math.min(5, n));
     }
 
     /* Return semi-transparent background color for a kind badge */
@@ -2377,15 +2410,23 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
 
     graphCanvas.addEventListener('wheel', (e) => {
       e.preventDefault();
-      const rect = graphCanvas.getBoundingClientRect();
-      const cx = e.clientX - rect.left;
-      const cy = e.clientY - rect.top;
-      const factor = e.deltaY < 0 ? 1.1 : 0.9;
-      const newZoom = Math.max(0.2, Math.min(5, gZoom * factor));
-      // Zoom towards cursor
-      gPan.x = cx - (cx - gPan.x) * (newZoom / gZoom);
-      gPan.y = cy - (cy - gPan.y) * (newZoom / gZoom);
-      gZoom = newZoom;
+      if (e.ctrlKey) {
+        const rect = graphCanvas.getBoundingClientRect();
+        const cx = e.clientX - rect.left;
+        const cy = e.clientY - rect.top;
+        const factor = e.deltaY < 0 ? 1.1 : 0.9;
+        const newZoom = Math.max(0.2, Math.min(5, gZoom * factor));
+        // Zoom towards cursor
+        gPan.x = cx - (cx - gPan.x) * (newZoom / gZoom);
+        gPan.y = cy - (cy - gPan.y) * (newZoom / gZoom);
+        gZoom = newZoom;
+      } else if (e.shiftKey) {
+        const dx = Math.abs(e.deltaX) > 0.01 ? e.deltaX : e.deltaY;
+        gPan.x -= dx * gWheelPanSensitivity;
+      } else {
+        gPan.x -= e.deltaX * gWheelTiltPanSensitivity;
+        gPan.y -= e.deltaY * gWheelPanSensitivity;
+      }
       graphDraw();
     }, { passive: false });
 

@@ -62,6 +62,15 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 
+  // 配置变更时更新交互灵敏度
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('mapView.wheelPanSensitivity') || e.affectsConfiguration('mapView.wheelTiltPanSensitivity')) {
+        mapProvider.pushInteractionConfig();
+      }
+    })
+  );
+
   // 命令：手动打开/聚焦面板
   context.subscriptions.push(
     vscode.commands.registerCommand('peekView.reveal', () => {
