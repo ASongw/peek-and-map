@@ -36,6 +36,11 @@
           "id": "mapPanel",
           "title": "Map",
           "icon": "$(references)"
+        },
+        {
+          "id": "symbolPanel",
+          "title": "Symbol",
+          "icon": "$(search)"
         }
       ]
     },
@@ -55,6 +60,14 @@
           "name": "Map View",
           "icon": "media/icon.png"
         }
+      ],
+      "symbolPanel": [
+        {
+          "type": "webview",
+          "id": "symbolSearch.view",
+          "name": "Symbol Search",
+          "icon": "media/icon.png"
+        }
       ]
     },
     "commands": [
@@ -65,6 +78,10 @@
       {
         "command": "mapView.reveal",
         "title": "Peek and Map: Show Map View"
+      },
+      {
+        "command": "symbolSearch.reveal",
+        "title": "Peek and Map: Show Symbol Search"
       }
     ],
     "configuration": {

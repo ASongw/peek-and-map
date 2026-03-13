@@ -9,7 +9,8 @@ peek/
 │   ├── theme.ts              # 主题颜色提取：JSONC 解析、主题文件加载、CSS 生成
 │   ├── utils.ts              # 通用工具函数（getNonce 等）
 │   ├── peekView.ts       # PeekViewProvider — 代码预览面板
-│   └── mapView.ts        # MapViewProvider — 引用/调用关系面板
+│   ├── mapView.ts        # MapViewProvider — 引用/调用关系面板
+│   └── symbolSearchView.ts # SymbolSearchViewProvider — 工作区符号搜索面板
 ├── out/                      # 编译产物（自动生成）
 │   ├── extension.js
 │   ├── constants.js
@@ -17,7 +18,8 @@ peek/
 │   ├── theme.js
 │   ├── utils.js
 │   ├── peekView.js
-│   └── mapView.js
+│   ├── mapView.js
+│   └── symbolSearchView.js
 ├── media/
 │   ├── prism.js              # Prism 核心（本地，无 CDN）
 │   ├── prism-autoloader.min.js  # Prism 语言自动加载插件
@@ -34,10 +36,10 @@ peek/
 
 ### `extension.ts` — 扩展入口
 
-- 注册 `PeekViewProvider` 和 `MapViewProvider` 两个 webview view provider
+- 注册 `PeekViewProvider`、`MapViewProvider` 和 `SymbolSearchViewProvider` 三个 webview view provider
 - 监听编辑器事件（`onDidChangeActiveTextEditor`、`onDidChangeTextEditorSelection`、`onDidChangeTextDocument`）并通知 provider 更新
 - 监听主题变更事件，触发重新推送配色
-- 注册 `peekView.reveal` 和 `mapView.reveal` 命令
+- 注册 `peekView.reveal`、`mapView.reveal` 和 `symbolSearch.reveal` 命令
 
 ### `constants.ts` — 常量定义
 
@@ -125,6 +127,17 @@ peek/
 | `jumpTo` | 双击：在编辑器中打开文件并定位（`preserveFocus: false`），同时通过 `peekLocation()` 更新 Peek View |
 | `peekOnly` | 单击：调用 `_peekView.peekLocation()` 直接更新 Peek View，不打开编辑器 |
 | `setViewState` | 保存当前 Map 视图状态（`mode` + `direction`） |
+
+### `symbolSearchView.ts` — Symbol Search 面板
+
+`SymbolSearchViewProvider` 实现 `WebviewViewProvider`，用于工作区符号检索：
+
+| 方法 | 说明 |
+|------|------|
+| `pushThemeColors()` | 推送主题 token 与符号类型颜色到 webview |
+| `_search()` | 调用 `vscode.executeWorkspaceSymbolProvider` 搜索符号，并回传结果列表 |
+| `_openLocation()` | 打开符号所在文件并定位到具体行列 |
+| `_getHtml()` | 返回搜索框与结果列表的 webview UI，输入实时更新结果 |
 
 ## 关键配置项
 

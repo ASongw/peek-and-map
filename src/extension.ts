@@ -1,10 +1,12 @@
 import * as vscode from 'vscode';
 import { PeekViewProvider } from './peekView';
 import { MapViewProvider } from './mapView';
+import { SymbolSearchViewProvider } from './symbolSearchView';
 
 export function activate(context: vscode.ExtensionContext): void {
   const peekprovider = new PeekViewProvider(context.extensionUri);
   const mapProvider = new MapViewProvider(context.extensionUri, context);
+  const symbolSearchProvider = new SymbolSearchViewProvider(context.extensionUri);
 
   // Allow MapViewProvider to update the peek view directly on single-click
   mapProvider.setPeekView(peekprovider);
@@ -21,6 +23,14 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerWebviewViewProvider(
       MapViewProvider.viewType,
       mapProvider,
+      { webviewOptions: { retainContextWhenHidden: true } }
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(
+      SymbolSearchViewProvider.viewType,
+      symbolSearchProvider,
       { webviewOptions: { retainContextWhenHidden: true } }
     )
   );
@@ -58,6 +68,7 @@ export function activate(context: vscode.ExtensionContext): void {
       setTimeout(() => {
         peekprovider.pushThemeColors();
         mapProvider.pushThemeColors();
+        symbolSearchProvider.pushThemeColors();
       }, 300);
     })
   );
@@ -81,6 +92,12 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('mapView.reveal', () => {
       vscode.commands.executeCommand('mapView.view.focus');
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('symbolSearch.reveal', () => {
+      vscode.commands.executeCommand('symbolSearch.view.focus');
     })
   );
 }
