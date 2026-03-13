@@ -106,13 +106,15 @@ peek/
 | `stripParams(name)` | 去除函数参数：`"foo(a, b)"` → `"foo"` |
 | `graphBuildFromData(d)` | 从搜索结果构建图形节点/边数据，根符号作为真实节点参与渲染，自动合并同符号的重复引用节点 |
 | `mergeItemsBySymbol(items)` | 将多个引用同一封闭符号的 TreeNodeData 合并为单个图形节点，收集所有调用位置（callSites） |
-| `graphLayout()` | BFS 层级布局 + 宽度/高度计算（多调用位置节点自动增高）+ 居中定位；按方向支持 `up/down/left/right` 并保持稳定排序避免交叉渲染 |
+| `graphLayout()` | 递归子树布局 + 宽度/高度计算（多调用位置节点自动增高）；父节点始终位于子节点集合几何中心，并在四方向（`up/down/left/right`）下按“展开反方向”进行同级贴边对齐（非层内居中） |
 | `graphDraw()` | Canvas 2D 渲染：Bezier 曲线连边、箭头、节点（普通节点为圆角矩形；函数声明节点为直角梯形，`left` 方向自动镜像）、彩色 Emoji 图标前缀（💿 Function、📀 Method、📱 Class 等，无背景底板，颜色继承自主题 `--peek-kind-*` CSS 变量）、标签；多调用位置节点额外渲染可点击的行号徽章（如 `L10` `L20` `L30`）；展开等待动画沿节点延伸方向显示；节点尝试展开且无子节点时，侧边按钮显示为空心圆 |
 | `wheel` 事件处理 | `Ctrl+滚轮` 缩放；普通滚轮上下平移；`Shift+滚轮` 左右平移；鼠标滚轮左右拨动（`deltaX`）左右平移 |
 | `graphHitTest(cx, cy)` | 鼠标坐标命中测试 |
 | `graphHitTestCallSite(node, cx, cy)` | 命中测试节点内的调用位置徽章，返回徽章索引 |
 | `graphHandleChildren()` | 处理扩展后返回的子节点，更新图形 |
 | `graphCollapse(node)` | 递归移除当前图中的后代节点，并保留后代展开状态以便重新展开时恢复 |
+
+> 图形文本补充：在垂直方向（`up/down`）下，若节点名为限定名（如 `Class::method`），节点内符号会改为两行渲染：第一行 `Class::`，第二行 `method`。
 
 #### 消息类型
 

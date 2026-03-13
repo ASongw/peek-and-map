@@ -1632,7 +1632,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       return v || null;
     }
 
-    /* Tree layout: left-to-right, depth-first */
+    /* Tree layout: parent centered on the geometric center of its expanded subtree */
     function graphLayout() {
       const dpr = window.devicePixelRatio || 1;
       const cw = graphContainer.clientWidth;
@@ -1645,26 +1645,37 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       const fontSize = 12;
       const font = fontSize + 'px ' + getComputedStyle(document.body).fontFamily;
 
-      // Compute widths and heights
       const callFont = '10px ' + getComputedStyle(document.body).fontFamily;
       const nodeMap = {};
       for (const n of gNodes) {
         nodeMap[n.id] = n;
         const isRootNode = n.id === '__root__';
         const displayLabel = stripParams(n.label);
-        const labelW = gTextWidth(displayLabel, isRootNode ? ('bold ' + font) : font);
+        const qn = splitQualifiedName(displayLabel);
+        const useTwoLineLabel = (graphDirection === 'up' || graphDirection === 'down') && !!(qn && qn.owner);
+        const ownerText = qn ? qn.owner : '';
+        const memberText = qn ? qn.member : displayLabel;
+        const ownerW = ownerText ? gTextWidth(ownerText, isRootNode ? ('bold ' + font) : font) : 0;
+        const sepW = ownerText ? gTextWidth('::', isRootNode ? ('bold ' + font) : font) : 0;
+        const memberW = gTextWidth(memberText, isRootNode ? ('bold ' + font) : font);
+        const labelW = useTwoLineLabel ? Math.max(ownerW + sepW, memberW) : (ownerW + sepW + memberW);
         let baseW = G_NODE_PAD_L + G_NODE_PAD_R + G_KIND_BADGE_W + G_KIND_BADGE_GAP + labelW;
         if (isDeclarationNode(n)) {
           baseW += G_DECL_RIGHT_EXTRA;
         }
 
-        // Multi-callsite: compute badge row width
+        const twoLineHeaderH = useTwoLineLabel ? Math.max(G_NODE_H, fontSize * 2 + G_PAD_Y * 2 + 2) : G_NODE_H;
+        n._labelTwoLine = useTwoLineLabel;
+        n._labelOwner = ownerText;
+        n._labelMember = memberText;
+        n._headerH = twoLineHeaderH;
+
         const cs = n.callSites;
         if (cs && cs.length > 1) {
           let maxBadgesRowW = 0;
           for (let rowStart = 0; rowStart < cs.length; rowStart += G_CALLS_PER_ROW) {
             const rowEnd = Math.min(cs.length, rowStart + G_CALLS_PER_ROW);
-            let rowW = G_NODE_PAD_L; // left padding
+            let rowW = G_NODE_PAD_L;
             for (let si = rowStart; si < rowEnd; si++) {
               const txt = 'L' + (cs[si].callLine + 1);
               rowW += gTextWidth(txt, callFont) + G_CALL_BADGE_PAD_X + G_CALL_BADGE_GAP;
@@ -1674,162 +1685,209 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
           }
           if (maxBadgesRowW > baseW) { baseW = maxBadgesRowW; }
           const rowCount = Math.ceil(cs.length / G_CALLS_PER_ROW);
-          n.h = G_NODE_H + rowCount * G_CALL_ROW_H;
+          n.h = twoLineHeaderH + rowCount * G_CALL_ROW_H;
         } else {
-          n.h = G_NODE_H;
+          n.h = twoLineHeaderH;
         }
 
         n.w = Math.max(baseW, 60);
       }
 
-      // BFS level assignment
+      if (gNodes.length === 0) {
+        return;
+      }
+
+      const rootNode = nodeMap['__root__'] || gNodes.find(n => n.parentId == null) || gNodes[0];
+      const rootId = rootNode.id;
+
+      const compareNodeIds = (aId, bId) => {
+        const a = nodeMap[aId];
+        const b = nodeMap[bId];
+        if (!a || !b) return String(aId).localeCompare(String(bId));
+
+        const lineA = a.data?.callLine ?? a.data?.line ?? -1;
+        const lineB = b.data?.callLine ?? b.data?.line ?? -1;
+        if (lineA !== lineB) return lineA - lineB;
+
+        const charA = a.data?.callCharacter ?? a.data?.character ?? -1;
+        const charB = b.data?.callCharacter ?? b.data?.character ?? -1;
+        if (charA !== charB) return charA - charB;
+
+        return String(a.label || '').localeCompare(String(b.label || ''));
+      };
+
+      const childIdsOf = (node) => {
+        return (node.children || [])
+          .filter(cid => !!nodeMap[cid])
+          .slice()
+          .sort(compareNodeIds);
+      };
+
       const levels = {};
-      const queue = ['__root__'];
-      levels['__root__'] = 0;
+      const queue = [rootId];
+      levels[rootId] = 0;
       while (queue.length > 0) {
-        const cur = queue.shift();
-        const node = nodeMap[cur];
-        if (!node) continue;
-        for (const cid of node.children) {
+        const curId = queue.shift();
+        const cur = nodeMap[curId];
+        if (!cur) continue;
+        const nextLevel = levels[curId] + 1;
+        for (const cid of childIdsOf(cur)) {
           if (levels[cid] === undefined) {
-            levels[cid] = levels[cur] + 1;
+            levels[cid] = nextLevel;
             queue.push(cid);
           }
         }
       }
 
-      // Group by level
-      const byLevel = {};
-      let maxLevel = 0;
       for (const n of gNodes) {
-        const lv = levels[n.id] !== undefined ? levels[n.id] : 0;
-        if (!byLevel[lv]) byLevel[lv] = [];
-        byLevel[lv].push(n);
-        if (lv > maxLevel) maxLevel = lv;
+        if (levels[n.id] === undefined) {
+          levels[n.id] = 0;
+        }
       }
 
-      if (graphDirection === 'up' || graphDirection === 'down') {
-        // Position: Y by level, X spread horizontally
-        const yDir = graphDirection === 'up' ? -1 : 1;
-        const levelMaxH = {};
-        for (let lv = 0; lv <= maxLevel; lv++) {
-          const group = byLevel[lv] || [];
-          let maxH = 0;
-          for (const n of group) {
-            if (n.h > maxH) maxH = n.h;
-          }
-          levelMaxH[lv] = maxH;
+      let maxLevel = 0;
+      for (const n of gNodes) {
+        if (levels[n.id] > maxLevel) {
+          maxLevel = levels[n.id];
+        }
+      }
+
+      const levelMaxW = {};
+      const levelMaxH = {};
+      for (let lv = 0; lv <= maxLevel; lv++) {
+        levelMaxW[lv] = 0;
+        levelMaxH[lv] = 0;
+      }
+      for (const n of gNodes) {
+        const lv = levels[n.id] ?? 0;
+        if (n.w > levelMaxW[lv]) levelMaxW[lv] = n.w;
+        if (n.h > levelMaxH[lv]) levelMaxH[lv] = n.h;
+      }
+
+      const colLeft = {};
+      const rowTop = {};
+      colLeft[0] = 40;
+      rowTop[0] = 40;
+
+      if (graphDirection === 'right') {
+        for (let lv = 1; lv <= maxLevel; lv++) {
+          colLeft[lv] = colLeft[lv - 1] + levelMaxW[lv - 1] + G_LEVEL_GAP_X;
+        }
+      } else if (graphDirection === 'left') {
+        for (let lv = 1; lv <= maxLevel; lv++) {
+          colLeft[lv] = colLeft[lv - 1] - G_LEVEL_GAP_X - levelMaxW[lv];
+        }
+      }
+
+      if (graphDirection === 'down') {
+        for (let lv = 1; lv <= maxLevel; lv++) {
+          rowTop[lv] = rowTop[lv - 1] + levelMaxH[lv - 1] + G_LEVEL_GAP_Y;
+        }
+      } else if (graphDirection === 'up') {
+        for (let lv = 1; lv <= maxLevel; lv++) {
+          rowTop[lv] = rowTop[lv - 1] - G_LEVEL_GAP_Y - levelMaxH[lv];
+        }
+      }
+
+      const spanCache = new Map();
+      const calcSubtreeSpan = (nodeId, horizontalGrowth, visiting = new Set()) => {
+        const cached = spanCache.get(nodeId);
+        if (cached && cached.axis === horizontalGrowth) {
+          return cached.span;
         }
 
-        let yOffset = 40;
-        let prevLevelOrder = new Map();
-        for (let lv = 0; lv <= maxLevel; lv++) {
-          const group = (byLevel[lv] || []).slice();
-
-          // Keep sibling ordering stable and independent from expansion order.
-          // Primary key: parent order from previous level, then parent x-center,
-          // then call-site position/name for deterministic ordering.
-          if (lv > 0) {
-            group.sort((a, b) => {
-              const parentOrderA = prevLevelOrder.get(a.parentId) ?? Number.MAX_SAFE_INTEGER;
-              const parentOrderB = prevLevelOrder.get(b.parentId) ?? Number.MAX_SAFE_INTEGER;
-              if (parentOrderA !== parentOrderB) return parentOrderA - parentOrderB;
-
-              const parentA = nodeMap[a.parentId];
-              const parentB = nodeMap[b.parentId];
-              const parentCenterA = parentA ? (parentA.x + parentA.w / 2) : 0;
-              const parentCenterB = parentB ? (parentB.x + parentB.w / 2) : 0;
-              if (parentCenterA !== parentCenterB) return parentCenterA - parentCenterB;
-
-              const lineA = a.data?.callLine ?? a.data?.line ?? -1;
-              const lineB = b.data?.callLine ?? b.data?.line ?? -1;
-              if (lineA !== lineB) return lineA - lineB;
-
-              const charA = a.data?.callCharacter ?? a.data?.character ?? -1;
-              const charB = b.data?.callCharacter ?? b.data?.character ?? -1;
-              if (charA !== charB) return charA - charB;
-
-              return String(a.label || '').localeCompare(String(b.label || ''));
-            });
-          }
-
-          let totalW = 0;
-          for (const n of group) totalW += n.w;
-          totalW += Math.max(0, group.length - 1) * G_SIBLING_GAP_X;
-          let xCur = (cw / 2) - (totalW / 2);
-
-          for (let i = 0; i < group.length; i++) {
-            group[i].x = xCur;
-            group[i].y = yOffset;
-            xCur += group[i].w + G_SIBLING_GAP_X;
-          }
-
-          const currentOrder = new Map();
-          for (let i = 0; i < group.length; i++) {
-            currentOrder.set(group[i].id, i);
-          }
-          prevLevelOrder = currentOrder;
-
-          yOffset += yDir * (levelMaxH[lv] + G_LEVEL_GAP_Y);
+        const node = nodeMap[nodeId];
+        if (!node) return 0;
+        if (visiting.has(nodeId)) {
+          return horizontalGrowth ? node.h : node.w;
         }
+
+        visiting.add(nodeId);
+        const ownSpan = horizontalGrowth ? node.h : node.w;
+        const childIds = childIdsOf(node).filter(cid => levels[cid] === (levels[nodeId] + 1));
+        let childrenSpan = 0;
+        for (let i = 0; i < childIds.length; i++) {
+          const cSpan = calcSubtreeSpan(childIds[i], horizontalGrowth, visiting);
+          childrenSpan += cSpan;
+          if (i > 0) {
+            childrenSpan += horizontalGrowth ? G_SIBLING_GAP_Y : G_SIBLING_GAP_X;
+          }
+        }
+        visiting.delete(nodeId);
+
+        const span = Math.max(ownSpan, childrenSpan || 0);
+        spanCache.set(nodeId, { axis: horizontalGrowth, span });
+        return span;
+      };
+
+      if (graphDirection === 'left' || graphDirection === 'right') {
+        spanCache.clear();
+        const placeVertical = (nodeId, topY) => {
+          const node = nodeMap[nodeId];
+          if (!node) return;
+
+          const lv = levels[nodeId] ?? 0;
+          const subtreeSpan = calcSubtreeSpan(nodeId, true);
+          const nodeCenterY = topY + subtreeSpan / 2;
+          node.y = nodeCenterY - node.h / 2;
+          node.x = graphDirection === 'left'
+            ? (colLeft[lv] + levelMaxW[lv] - node.w)
+            : colLeft[lv];
+
+          const childIds = childIdsOf(node).filter(cid => levels[cid] === (lv + 1));
+          if (childIds.length === 0) return;
+
+          let childrenTotal = 0;
+          const childSpans = [];
+          for (let i = 0; i < childIds.length; i++) {
+            const sp = calcSubtreeSpan(childIds[i], true);
+            childSpans.push(sp);
+            childrenTotal += sp;
+            if (i > 0) childrenTotal += G_SIBLING_GAP_Y;
+          }
+
+          let childTop = topY + (subtreeSpan - childrenTotal) / 2;
+          for (let i = 0; i < childIds.length; i++) {
+            placeVertical(childIds[i], childTop);
+            childTop += childSpans[i] + G_SIBLING_GAP_Y;
+          }
+        };
+
+        placeVertical(rootId, 40);
       } else {
-        // Position: X by level, Y spread vertically
-        const xDir = graphDirection === 'left' ? -1 : 1;
-        let xOffset = 40;
-        let prevLevelOrder = new Map();
-        for (let lv = 0; lv <= maxLevel; lv++) {
-          const group = (byLevel[lv] || []).slice();
+        spanCache.clear();
+        const placeHorizontal = (nodeId, leftX) => {
+          const node = nodeMap[nodeId];
+          if (!node) return;
 
-          // Keep sibling ordering stable and independent from expansion order.
-          // Primary key: parent order from previous level, then parent y-center,
-          // then call-site position/name for deterministic ordering.
-          if (lv > 0) {
-            group.sort((a, b) => {
-              const parentOrderA = prevLevelOrder.get(a.parentId) ?? Number.MAX_SAFE_INTEGER;
-              const parentOrderB = prevLevelOrder.get(b.parentId) ?? Number.MAX_SAFE_INTEGER;
-              if (parentOrderA !== parentOrderB) return parentOrderA - parentOrderB;
+          const lv = levels[nodeId] ?? 0;
+          const subtreeSpan = calcSubtreeSpan(nodeId, false);
+          const nodeCenterX = leftX + subtreeSpan / 2;
+          node.x = nodeCenterX - node.w / 2;
+          node.y = graphDirection === 'up'
+            ? (rowTop[lv] + levelMaxH[lv] - node.h)
+            : rowTop[lv];
 
-              const parentA = nodeMap[a.parentId];
-              const parentB = nodeMap[b.parentId];
-              const parentCenterA = parentA ? (parentA.y + parentA.h / 2) : 0;
-              const parentCenterB = parentB ? (parentB.y + parentB.h / 2) : 0;
-              if (parentCenterA !== parentCenterB) return parentCenterA - parentCenterB;
+          const childIds = childIdsOf(node).filter(cid => levels[cid] === (lv + 1));
+          if (childIds.length === 0) return;
 
-              const lineA = a.data?.callLine ?? a.data?.line ?? -1;
-              const lineB = b.data?.callLine ?? b.data?.line ?? -1;
-              if (lineA !== lineB) return lineA - lineB;
-
-              const charA = a.data?.callCharacter ?? a.data?.character ?? -1;
-              const charB = b.data?.callCharacter ?? b.data?.character ?? -1;
-              if (charA !== charB) return charA - charB;
-
-              return String(a.label || '').localeCompare(String(b.label || ''));
-            });
+          let childrenTotal = 0;
+          const childSpans = [];
+          for (let i = 0; i < childIds.length; i++) {
+            const sp = calcSubtreeSpan(childIds[i], false);
+            childSpans.push(sp);
+            childrenTotal += sp;
+            if (i > 0) childrenTotal += G_SIBLING_GAP_X;
           }
 
-          let maxW = 0;
-          for (const n of group) {
-            if (n.w > maxW) maxW = n.w;
+          let childLeft = leftX + (subtreeSpan - childrenTotal) / 2;
+          for (let i = 0; i < childIds.length; i++) {
+            placeHorizontal(childIds[i], childLeft);
+            childLeft += childSpans[i] + G_SIBLING_GAP_X;
           }
-          let totalH = 0;
-          for (const n of group) totalH += n.h;
-          totalH += (group.length - 1) * G_SIBLING_GAP_Y;
-          let yStart = (ch / 2) - (totalH / 2);
-          let yCur = yStart;
-          for (let i = 0; i < group.length; i++) {
-            group[i].x = graphDirection === 'left' ? (xOffset - group[i].w) : xOffset;
-            group[i].y = yCur;
-            yCur += group[i].h + G_SIBLING_GAP_Y;
-          }
+        };
 
-          const currentOrder = new Map();
-          for (let i = 0; i < group.length; i++) {
-            currentOrder.set(group[i].id, i);
-          }
-          prevLevelOrder = currentOrder;
-
-          xOffset += xDir * (maxW + G_LEVEL_GAP_X);
-        }
+        placeHorizontal(rootId, 40);
       }
 
       // Center the graph horizontally
@@ -2233,9 +2291,10 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
           }
         }
 
-        // Kind badge + label (single row; mirrored alignment in left direction)
+        // Kind badge + label (supports two-line qualified names in vertical mode)
         const hasMultiCS = n.callSites && n.callSites.length > 1;
-        const labelY = hasMultiCS ? (n.y + G_NODE_H / 2) : ncy;
+        const headerH = n._headerH || G_NODE_H;
+        const labelCenterY = n.y + headerH / 2;
         const letter    = nodeKindIcon(n.kind);
         const badgeW    = G_KIND_BADGE_W;
         const badgeH    = G_KIND_BADGE_W;
@@ -2244,13 +2303,14 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         ctx.font = drawFont;
         const rawLabel  = stripParams(n.label);
         const qn = splitQualifiedName(rawLabel);
-        const ownerText = qn ? qn.owner : '';
-        const memberText = qn ? qn.member : rawLabel;
-        const sepText = qn ? '::' : '';
+        const useTwoLineLabel = !!n._labelTwoLine;
+        const ownerText = n._labelOwner != null ? n._labelOwner : (qn ? qn.owner : '');
+        const memberText = n._labelMember != null ? n._labelMember : (qn ? qn.member : rawLabel);
+        const sepText = ownerText ? '::' : '';
         const ownerW = ownerText ? gTextWidth(ownerText, drawFont) : 0;
         const sepW = sepText ? gTextWidth(sepText, drawFont) : 0;
         const memberW = gTextWidth(memberText, drawFont);
-        const textW = ownerW + sepW + memberW;
+        const textW = useTwoLineLabel ? Math.max(ownerW + sepW, memberW) : (ownerW + sepW + memberW);
         const totalContentW = badgeW + badgeGap + textW;
         const startX = graphDirection === 'left'
           ? (n.x + n.w - G_NODE_PAD_R - totalContentW)
@@ -2261,7 +2321,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         ctx.fillStyle = kindBorderColor;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(letter, startX + badgeW / 2, labelY);
+        ctx.fillText(letter, startX + badgeW / 2, labelCenterY);
 
         // Label text
         ctx.font = drawFont;
@@ -2273,16 +2333,30 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
         let textX = startX + badgeW + badgeGap;
-        if (ownerText) {
+        if (useTwoLineLabel && ownerText) {
+          const lineGap = 2;
+          const firstLineY = labelCenterY - (fontSize / 2 + lineGap / 2);
+          const secondLineY = labelCenterY + (fontSize / 2 + lineGap / 2);
+
           ctx.fillStyle = ownerColor;
-          ctx.fillText(ownerText, textX, labelY);
-          textX += ownerW;
+          ctx.fillText(ownerText, textX, firstLineY);
           ctx.fillStyle = sepColor;
-          ctx.fillText('::', textX, labelY);
-          textX += sepW;
+          ctx.fillText('::', textX + ownerW, firstLineY);
+
+          ctx.fillStyle = memberColor;
+          ctx.fillText(memberText, textX, secondLineY);
+        } else {
+          if (ownerText) {
+            ctx.fillStyle = ownerColor;
+            ctx.fillText(ownerText, textX, labelCenterY);
+            textX += ownerW;
+            ctx.fillStyle = sepColor;
+            ctx.fillText('::', textX, labelCenterY);
+            textX += sepW;
+          }
+          ctx.fillStyle = memberColor;
+          ctx.fillText(memberText, textX, labelCenterY);
         }
-        ctx.fillStyle = memberColor;
-        ctx.fillText(memberText, textX, labelY);
 
         // Expand/collapse toggle icon (on node extension side)
         if (graphNodeCanToggle(n) || n.noChildren) {
@@ -2348,7 +2422,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         if (cs && cs.length > 1) {
           const cFont = '10px ' + getComputedStyle(document.body).fontFamily;
           ctx.font = cFont;
-          const badgeRowY = n.y + G_NODE_H;
+          const badgeRowY = n.y + headerH;
           for (let rowStart = 0; rowStart < cs.length; rowStart += G_CALLS_PER_ROW) {
             const rowEnd = Math.min(cs.length, rowStart + G_CALLS_PER_ROW);
             let bx = graphDirection === 'left'
