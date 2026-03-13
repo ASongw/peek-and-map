@@ -6,7 +6,7 @@ import { SymbolSearchViewProvider } from './symbolSearchView';
 export function activate(context: vscode.ExtensionContext): void {
   const peekprovider = new PeekViewProvider(context.extensionUri);
   const mapProvider = new MapViewProvider(context.extensionUri, context);
-  const symbolSearchProvider = new SymbolSearchViewProvider(context.extensionUri);
+  const symbolSearchProvider = new SymbolSearchViewProvider(context.extensionUri, context);
 
   // Allow MapViewProvider to update the peek view directly on single-click
   mapProvider.setPeekView(peekprovider);

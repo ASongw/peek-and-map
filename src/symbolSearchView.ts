@@ -13,13 +13,47 @@ interface SymbolSearchResultItem {
   character: number;
 }
 
+type SearchMode = 'exact' | 'fuzzy';
+type SortMode = 'relevance' | 'name-asc' | 'name-desc' | 'kind' | 'path';
+
 export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'symbolSearch.view';
+  private static readonly SEARCH_MODE_STATE_KEY = 'symbolSearch.searchMode';
+  private static readonly SORT_MODE_STATE_KEY = 'symbolSearch.sortMode';
 
   private _view?: vscode.WebviewView;
   private _searchSeq = 0;
+  private _searchMode: SearchMode;
+  private _sortMode: SortMode;
 
-  constructor(private readonly _extensionUri: vscode.Uri) {}
+  constructor(
+    private readonly _extensionUri: vscode.Uri,
+    private readonly _context: vscode.ExtensionContext
+  ) {
+    this._searchMode = this._normalizeSearchMode(
+      this._context.workspaceState.get<string>(SymbolSearchViewProvider.SEARCH_MODE_STATE_KEY)
+    );
+    this._sortMode = this._normalizeSortMode(
+      this._context.workspaceState.get<string>(SymbolSearchViewProvider.SORT_MODE_STATE_KEY)
+    );
+  }
+
+  private _normalizeSearchMode(mode: unknown): SearchMode {
+    return mode === 'fuzzy' ? 'fuzzy' : 'exact';
+  }
+
+  private _normalizeSortMode(mode: unknown): SortMode {
+    return mode === 'name-asc' || mode === 'name-desc' || mode === 'kind' || mode === 'path'
+      ? mode
+      : 'relevance';
+  }
+
+  private async _savePreferences(mode: SearchMode, sortMode: SortMode): Promise<void> {
+    this._searchMode = this._normalizeSearchMode(mode);
+    this._sortMode = this._normalizeSortMode(sortMode);
+    await this._context.workspaceState.update(SymbolSearchViewProvider.SEARCH_MODE_STATE_KEY, this._searchMode);
+    await this._context.workspaceState.update(SymbolSearchViewProvider.SORT_MODE_STATE_KEY, this._sortMode);
+  }
 
   pushThemeColors(): void {
     if (!this._view) { return; }
@@ -46,6 +80,11 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
       if (msg.type === 'ready') {
         this.pushThemeColors();
         webviewView.webview.postMessage({
+          type: 'initPreferences',
+          mode: this._searchMode,
+          sortMode: this._sortMode,
+        });
+        webviewView.webview.postMessage({
           type: 'results',
           requestId: 0,
           query: '',
@@ -58,7 +97,16 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
       if (msg.type === 'queryChange') {
         const query = typeof msg.query === 'string' ? msg.query : '';
         const requestId = typeof msg.requestId === 'number' ? msg.requestId : 0;
-        await this._search(query, requestId);
+        const fuzzy = Boolean(msg.fuzzy);
+        const sortMode = this._normalizeSortMode(msg.sortMode);
+        await this._search(query, requestId, fuzzy, sortMode);
+        return;
+      }
+
+      if (msg.type === 'setPreferences') {
+        const mode: SearchMode = Boolean(msg.fuzzy) ? 'fuzzy' : 'exact';
+        const sortMode = this._normalizeSortMode(msg.sortMode);
+        await this._savePreferences(mode, sortMode);
         return;
       }
 
@@ -72,7 +120,7 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private async _search(query: string, requestId: number): Promise<void> {
+  private async _search(query: string, requestId: number, fuzzy: boolean, sortMode: SortMode): Promise<void> {
     if (!this._view) { return; }
 
     const trimmed = query.trim();
@@ -108,7 +156,19 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
 
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const maxResults = 300;
-    const items = rawItems.slice(0, maxResults).map((item) => {
+    const filteredItems = rawItems.filter((item) => {
+      const name = item.name ?? '';
+      const containerName = item.containerName ?? '';
+      const kind = this._kindToString(item.kind);
+      const source = `${name} ${containerName} ${kind}`;
+      return fuzzy
+        ? this._isFuzzyMatch(source, trimmed)
+        : source.toLowerCase().includes(trimmed.toLowerCase());
+    });
+
+    const sortedItems = this._sortItems(filteredItems, sortMode);
+
+    const items = sortedItems.slice(0, maxResults).map((item) => {
       const fsPath = item.location.uri.fsPath;
       const relativePath = workspaceRoot
         ? path.relative(workspaceRoot, fsPath).replace(/\\/g, '/')
@@ -129,8 +189,62 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
       requestId,
       query: trimmed,
       items,
-      total: rawItems.length,
+      total: filteredItems.length,
+      fuzzy,
+      sortMode,
     });
+  }
+
+  private _sortItems(items: vscode.SymbolInformation[], sortMode: SortMode): vscode.SymbolInformation[] {
+    if (sortMode === 'relevance') {
+      return items;
+    }
+
+    const getKind = (item: vscode.SymbolInformation): string => this._kindToString(item.kind);
+    const sorted = [...items].sort((left, right) => {
+      if (sortMode === 'name-asc' || sortMode === 'name-desc') {
+        const leftName = (left.name ?? '').toLowerCase();
+        const rightName = (right.name ?? '').toLowerCase();
+        const result = leftName.localeCompare(rightName);
+        return sortMode === 'name-desc' ? -result : result;
+      }
+
+      if (sortMode === 'kind') {
+        const kindResult = getKind(left).localeCompare(getKind(right));
+        if (kindResult !== 0) {
+          return kindResult;
+        }
+        return (left.name ?? '').toLowerCase().localeCompare((right.name ?? '').toLowerCase());
+      }
+
+      const leftPath = left.location.uri.fsPath.toLowerCase();
+      const rightPath = right.location.uri.fsPath.toLowerCase();
+      const pathResult = leftPath.localeCompare(rightPath);
+      if (pathResult !== 0) {
+        return pathResult;
+      }
+      return (left.name ?? '').toLowerCase().localeCompare((right.name ?? '').toLowerCase());
+    });
+
+    return sorted;
+  }
+
+  private _isFuzzyMatch(source: string, query: string): boolean {
+    const sourceLower = source.toLowerCase();
+    const queryLower = query.toLowerCase();
+    if (!queryLower) {
+      return true;
+    }
+    let queryIndex = 0;
+    for (let sourceIndex = 0; sourceIndex < sourceLower.length; sourceIndex++) {
+      if (sourceLower[sourceIndex] === queryLower[queryIndex]) {
+        queryIndex++;
+        if (queryIndex >= queryLower.length) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   private async _openLocation(uri: vscode.Uri, line: number, character: number): Promise<void> {
@@ -210,7 +324,70 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
       gap: 8px;
     }
 
+    #top-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #mode-tabs {
+      display: inline-flex;
+      border: 1px solid var(--vscode-panel-border, #333);
+      border-radius: 4px;
+      overflow: hidden;
+      flex-shrink: 0;
+      width: fit-content;
+    }
+
+    .mode-tab {
+      cursor: pointer;
+      padding: 2px 10px;
+      font-size: 12px;
+      line-height: 1.4;
+      border: none;
+      background: var(--vscode-sideBarSectionHeader-background, #252526);
+      color: var(--vscode-foreground, #d4d4d4);
+      border-right: 1px solid var(--vscode-panel-border, #333);
+    }
+
+    .mode-tab:last-child {
+      border-right: none;
+    }
+
+    .mode-tab.active {
+      background: var(--vscode-tab-activeBackground, #1e1e1e);
+      color: var(--vscode-tab-activeForeground, #fff);
+    }
+
+    #sort-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    #sort-wrap label {
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground, #858585);
+    }
+
+    #sort-mode {
+      height: 22px;
+      font-size: 12px;
+      border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border, #333));
+      background: var(--vscode-dropdown-background, var(--vscode-sideBarSectionHeader-background, #252526));
+      color: var(--vscode-dropdown-foreground, var(--vscode-foreground, #d4d4d4));
+      border-radius: 4px;
+      padding: 0 6px;
+    }
+
+    .search-row {
+      display: flex;
+      align-items: center;
+    }
+
     .input-wrap {
+      flex: 1;
       border: 1px solid var(--pm-border);
       border-radius: 6px;
       overflow: hidden;
@@ -286,9 +463,9 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
       text-overflow: ellipsis;
     }
 
-    .kind {
-      color: var(--peek-kind-Function, var(--pm-fg-muted));
-      font-size: 11px;
+    .kind-icon {
+      font-size: 13px;
+      line-height: 1;
       white-space: nowrap;
     }
 
@@ -307,20 +484,86 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
   </style>
 </head>
 <body>
-  <div class="input-wrap">
-    <input id="queryInput" type="text" placeholder="Search workspace symbols..." />
+  <div id="top-controls">
+    <div id="mode-tabs" role="tablist" aria-label="Search Mode">
+      <button id="mode-tab-exact" class="mode-tab active" role="tab" aria-selected="true" title="Exact search mode">Exact</button>
+      <button id="mode-tab-fuzzy" class="mode-tab" role="tab" aria-selected="false" title="Fuzzy search mode">Fuzzy</button>
+    </div>
+    <div id="sort-wrap">
+      <label for="sort-mode">Sort</label>
+      <select id="sort-mode" title="Sort search results">
+        <option value="relevance">Relevance</option>
+        <option value="name-asc">Name (A-Z)</option>
+        <option value="name-desc">Name (Z-A)</option>
+        <option value="kind">Kind</option>
+        <option value="path">Path</option>
+      </select>
+    </div>
+  </div>
+  <div class="search-row">
+    <div class="input-wrap">
+      <input id="queryInput" type="text" placeholder="Search workspace symbols..." />
+    </div>
   </div>
   <div id="status" class="status">Type to search symbols in workspace.</div>
   <div id="resultList" class="list"></div>
 
   <script nonce="${nonce}">
     const vscodeApi = acquireVsCodeApi();
+    const modeTabExact = document.getElementById('mode-tab-exact');
+    const modeTabFuzzy = document.getElementById('mode-tab-fuzzy');
+    const sortModeSelect = document.getElementById('sort-mode');
     const queryInput = document.getElementById('queryInput');
     const statusEl = document.getElementById('status');
     const listEl = document.getElementById('resultList');
 
     let requestId = 0;
     let debounceTimer = undefined;
+    let fuzzyMode = false;
+    let sortMode = 'relevance';
+
+    function updateModeTabs() {
+      if (modeTabExact) {
+        modeTabExact.classList.toggle('active', !fuzzyMode);
+        modeTabExact.setAttribute('aria-selected', fuzzyMode ? 'false' : 'true');
+      }
+      if (modeTabFuzzy) {
+        modeTabFuzzy.classList.toggle('active', fuzzyMode);
+        modeTabFuzzy.setAttribute('aria-selected', fuzzyMode ? 'true' : 'false');
+      }
+    }
+
+    function setSearchMode(nextFuzzy) {
+      const normalized = Boolean(nextFuzzy);
+      if (normalized === fuzzyMode) {
+        return;
+      }
+      fuzzyMode = normalized;
+      updateModeTabs();
+      persistPreferences();
+      sendQuery();
+    }
+
+    function setSortMode(nextSortMode) {
+      const normalized = String(nextSortMode || 'relevance');
+      if (normalized === sortMode) {
+        return;
+      }
+      sortMode = normalized;
+      if (sortModeSelect) {
+        sortModeSelect.value = sortMode;
+      }
+      persistPreferences();
+      sendQuery();
+    }
+
+    function persistPreferences() {
+      vscodeApi.postMessage({
+        type: 'setPreferences',
+        fuzzy: fuzzyMode,
+        sortMode,
+      });
+    }
 
     function escapeHtml(text) {
       return text
@@ -331,12 +574,35 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
         .replace(/'/g, '&#39;');
     }
 
+    function kindIcon(kind) {
+      const icons = {
+        'Function': '💿',
+        'Method': '📀',
+        'Class': '📱',
+        'Interface': '🔗',
+        'Variable': '🔷',
+        'Constant': '⭐',
+        'Property': '🟢',
+        'Field': '🟠',
+        'Enum': '🏷️',
+        'Module': '📦',
+        'Namespace': '📃',
+        'Struct': '💲',
+        'Constructor': '📲',
+        'File': '📄',
+        'Global': '🔵',
+      };
+      return icons[kind] || '•';
+    }
+
     function sendQuery() {
       requestId += 1;
       vscodeApi.postMessage({
         type: 'queryChange',
         requestId,
         query: queryInput.value,
+        fuzzy: fuzzyMode,
+        sortMode,
       });
     }
 
@@ -356,17 +622,18 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
       listEl.innerHTML = items.map((item) => {
         const name = escapeHtml(item.name || '');
         const kind = escapeHtml(item.kind || 'Symbol');
+        const icon = kindIcon(item.kind || 'Symbol');
         const container = escapeHtml(item.containerName || '');
         const relativePath = escapeHtml(item.relativePath || '');
-        const line = Number(item.line || 0) + 1;
         const character = Number(item.character || 0);
         const containerPart = container ? container + ' · ' : '';
-        return '<button class="item" data-uri="' + escapeHtml(item.uri || '') + '" data-line="' + (line - 1) + '" data-character="' + character + '">' +
+        const line = Number(item.line || 0);
+        return '<button class="item" data-uri="' + escapeHtml(item.uri || '') + '" data-line="' + line + '" data-character="' + character + '">' +
           '<div class="row-1">' +
+            '<span class="kind-icon" title="' + kind + '">' + icon + '</span>' +
             '<span class="name">' + name + '</span>' +
-            '<span class="kind">' + kind + '</span>' +
           '</div>' +
-          '<div class="row-2">' + containerPart + relativePath + ':L' + line + '</div>' +
+          '<div class="row-2">' + containerPart + relativePath + '</div>' +
         '</button>';
       }).join('');
     }
@@ -395,6 +662,15 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
     });
 
     queryInput.addEventListener('input', onInput);
+    if (modeTabExact) {
+      modeTabExact.addEventListener('click', () => setSearchMode(false));
+    }
+    if (modeTabFuzzy) {
+      modeTabFuzzy.addEventListener('click', () => setSearchMode(true));
+    }
+    if (sortModeSelect) {
+      sortModeSelect.addEventListener('change', () => setSortMode(sortModeSelect.value));
+    }
 
     window.addEventListener('message', (event) => {
       const msg = event.data;
@@ -427,19 +703,33 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
         }
         const query = String(msg.query || '').trim();
         const total = Number(msg.total || 0);
+        const fuzzy = Boolean(msg.fuzzy);
+        const currentSortMode = String(msg.sortMode || sortMode);
         if (!query) {
           statusEl.textContent = 'Type to search symbols in workspace.';
           listEl.innerHTML = '<div class="empty">Enter a keyword to start searching.</div>';
           return;
         }
         statusEl.textContent = total > 300
-          ? ('Showing first 300 results (total ' + total + ').')
-          : (total + ' result' + (total === 1 ? '' : 's') + '.');
+          ? ('Showing first 300 results (total ' + total + ')' + (fuzzy ? ' · fuzzy' : '') + ' · ' + currentSortMode + '.')
+          : (total + ' result' + (total === 1 ? '' : 's') + (fuzzy ? ' · fuzzy' : '') + ' · ' + currentSortMode + '.');
         renderItems(Array.isArray(msg.items) ? msg.items : []);
+        return;
+      }
+
+      if (msg.type === 'initPreferences') {
+        fuzzyMode = String(msg.mode || 'exact') === 'fuzzy';
+        sortMode = String(msg.sortMode || 'relevance');
+        updateModeTabs();
+        if (sortModeSelect) {
+          sortModeSelect.value = sortMode;
+        }
+        return;
       }
     });
 
     vscodeApi.postMessage({ type: 'ready' });
+    updateModeTabs();
     queryInput.focus();
   </script>
 </body>
