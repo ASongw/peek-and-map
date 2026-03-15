@@ -1,10 +1,15 @@
 # Peek and Map
 
-一个 **AI纯度99%** 的 VS Code 插件，提供 **Peek View**、**Map View** 和 **Symbol Search** 三个视图（可自由拖动）：
+一个 **99% AI + 1% Idea** 的 VS Code 插件，提供 **Peek View**、**Map View** 和 **Symbol Search** 三个视图，提供部分source insight的体验。
 
 - **Peek View**：实时展示光标处符号的定义体，跟随编辑器语法高亮、支持视图内跳转、前进后退导航和快速字体调整。
 - **Map View**：分析光标处符号的引用关系，支持 `Outline` / `Graph` 两种视图；`Graph` 支持上下左右四个生长方向，支持递归展开和跳转。
 - **Symbol Search**：在工作区内按关键字搜索符号（支持空格分隔多关键字 AND 匹配），输入时实时刷新结果列表；默认单击仅更新 Peek，双击跳转到定义位置（单击行为可配置）。
+
+---
+
+## 效果预览
+![overview](media/overview.png)
 
 ---
 
