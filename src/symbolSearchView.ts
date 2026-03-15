@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { getNonce } from './utils';
 import { generateThemeTokenCss, generateSymbolKindCss } from './theme';
+import { PeekViewProvider } from './peekView';
 
 interface SymbolSearchResultItem {
   name: string;
@@ -25,6 +26,7 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
   private _searchSeq = 0;
   private _searchMode: SearchMode;
   private _sortMode: SortMode;
+  private _peekView?: PeekViewProvider;
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
@@ -63,6 +65,23 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  pushInteractionConfig(): void {
+    if (!this._view) { return; }
+    this._view.webview.postMessage({
+      type: 'interactionConfig',
+      singleClickAction: this._getSingleClickAction(),
+    });
+  }
+
+  private _getSingleClickAction(): 'peekOnly' | 'jumpTo' {
+    const raw = vscode.workspace.getConfiguration('symbolSearch').get<string>('singleClickAction', 'peekOnly');
+    return raw === 'jumpTo' ? 'jumpTo' : 'peekOnly';
+  }
+
+  setPeekView(pv: PeekViewProvider): void {
+    this._peekView = pv;
+  }
+
   resolveWebviewView(
     webviewView: vscode.WebviewView,
     _context: vscode.WebviewViewResolveContext,
@@ -79,6 +98,7 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage(async (msg) => {
       if (msg.type === 'ready') {
         this.pushThemeColors();
+        this.pushInteractionConfig();
         webviewView.webview.postMessage({
           type: 'initPreferences',
           mode: this._searchMode,
@@ -110,12 +130,23 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
-      if (msg.type === 'openLocation') {
+      if (msg.type === 'peekOnly') {
         const uriRaw = typeof msg.uri === 'string' ? msg.uri : '';
         const line = typeof msg.line === 'number' ? msg.line : 0;
         const character = typeof msg.character === 'number' ? msg.character : 0;
         if (!uriRaw) { return; }
-        await this._openLocation(vscode.Uri.parse(uriRaw), line, character);
+        await this._peekLocation(vscode.Uri.parse(uriRaw), line, character);
+        return;
+      }
+
+      if (msg.type === 'jumpTo') {
+        const uriRaw = typeof msg.uri === 'string' ? msg.uri : '';
+        const line = typeof msg.line === 'number' ? msg.line : 0;
+        const character = typeof msg.character === 'number' ? msg.character : 0;
+        if (!uriRaw) { return; }
+        const uri = vscode.Uri.parse(uriRaw);
+        await this._peekLocation(uri, line, character);
+        await this._openLocation(uri, line, character);
       }
     });
   }
@@ -258,6 +289,12 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
     editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
   }
 
+  private async _peekLocation(uri: vscode.Uri, line: number, character: number): Promise<void> {
+    const safeLine = Math.max(0, line);
+    const safeCharacter = Math.max(0, character);
+    await this._peekView?.peekLocation(uri, new vscode.Position(safeLine, safeCharacter));
+  }
+
   private _kindToString(kind: vscode.SymbolKind): string {
     switch (kind) {
       case vscode.SymbolKind.File: return 'File';
@@ -292,13 +329,14 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
 
   private _getHtml(webview: vscode.Webview): string {
     const nonce = getNonce();
+    const initialThemeCss = generateThemeTokenCss() + generateSymbolKindCss();
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta
     http-equiv="Content-Security-Policy"
-    content="default-src 'none'; style-src ${webview.cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}';"
+    content="default-src 'none'; style-src 'unsafe-inline' ${webview.cspSource}; script-src 'nonce-${nonce}' ${webview.cspSource};"
   />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Symbol Search</title>
@@ -482,6 +520,7 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
       color: var(--pm-fg-muted);
     }
   </style>
+  <style id="theme-tokens">${initialThemeCss}</style>
 </head>
 <body>
   <div id="top-controls">
@@ -521,6 +560,20 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
     let debounceTimer = undefined;
     let fuzzyMode = false;
     let sortMode = 'relevance';
+    let singleClickAction = 'peekOnly';
+
+    function normalizeSingleClickAction(action) {
+      return action === 'jumpTo' ? 'jumpTo' : 'peekOnly';
+    }
+
+    function postSingleClickNavigation(uri, line, character) {
+      vscodeApi.postMessage({
+        type: singleClickAction === 'jumpTo' ? 'jumpTo' : 'peekOnly',
+        uri,
+        line,
+        character,
+      });
+    }
 
     function updateModeTabs() {
       if (modeTabExact) {
@@ -574,6 +627,37 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
         .replace(/'/g, '&#39;');
     }
 
+    function stripParams(name) {
+      const idx = String(name || '').indexOf('(');
+      return idx > 0 ? String(name).substring(0, idx) : String(name || '');
+    }
+
+    function splitQualifiedName(name) {
+      const clean = stripParams(name || '');
+      const idx = clean.lastIndexOf('::');
+      if (idx <= 0 || idx + 2 >= clean.length) {
+        return null;
+      }
+      return {
+        owner: clean.slice(0, idx),
+        member: clean.slice(idx + 2),
+      };
+    }
+
+    function renderQualifiedNameHtml(name, memberKind) {
+      const part = splitQualifiedName(name);
+      const kindKey = memberKind || 'Function';
+      const memberColor = 'var(--peek-kind-' + kindKey + ',var(--vscode-symbolIcon-functionForeground,#dcdcaa))';
+      if (!part) {
+        return '<span style="color:' + memberColor + '">' + escapeHtml(stripParams(name || '')) + '</span>';
+      }
+      const ownerColor = 'var(--peek-qualified-owner,var(--peek-kind-Class,var(--vscode-symbolIcon-classForeground,var(--vscode-editor-foreground,#d4d4d4))))';
+      const sepColor = 'var(--peek-operator,var(--vscode-editor-foreground,#d4d4d4))';
+      return '<span style="color:' + ownerColor + '">' + escapeHtml(part.owner) + '</span>'
+        + '<span style="color:' + sepColor + '">::</span>'
+        + '<span style="color:' + memberColor + '">' + escapeHtml(part.member) + '</span>';
+    }
+
     function kindIcon(kind) {
       const icons = {
         'Function': '💿',
@@ -620,9 +704,10 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
       }
 
       listEl.innerHTML = items.map((item) => {
-        const name = escapeHtml(item.name || '');
-        const kind = escapeHtml(item.kind || 'Symbol');
-        const icon = kindIcon(item.kind || 'Symbol');
+        const kindRaw = String(item.kind || 'Symbol');
+        const kind = escapeHtml(kindRaw);
+        const icon = kindIcon(kindRaw);
+        const nameHtml = renderQualifiedNameHtml(item.name || '', kindRaw);
         const container = escapeHtml(item.containerName || '');
         const relativePath = escapeHtml(item.relativePath || '');
         const character = Number(item.character || 0);
@@ -630,8 +715,8 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
         const line = Number(item.line || 0);
         return '<button class="item" data-uri="' + escapeHtml(item.uri || '') + '" data-line="' + line + '" data-character="' + character + '">' +
           '<div class="row-1">' +
-            '<span class="kind-icon" title="' + kind + '">' + icon + '</span>' +
-            '<span class="name">' + name + '</span>' +
+            '<span class="kind-icon" style="color:var(--peek-kind-' + kind + ',var(--vscode-foreground,#ccc))" title="' + kind + '">' + icon + '</span>' +
+            '<span class="name">' + nameHtml + '</span>' +
           '</div>' +
           '<div class="row-2">' + containerPart + relativePath + '</div>' +
         '</button>';
@@ -653,8 +738,28 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
       if (!uri) {
         return;
       }
+      if (event.detail === 1) {
+        postSingleClickNavigation(uri, line, character);
+      }
+    });
+
+    listEl.addEventListener('dblclick', (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const button = target.closest('.item');
+      if (!(button instanceof HTMLElement)) {
+        return;
+      }
+      const uri = button.dataset.uri || '';
+      const line = Number(button.dataset.line || '0');
+      const character = Number(button.dataset.character || '0');
+      if (!uri) {
+        return;
+      }
       vscodeApi.postMessage({
-        type: 'openLocation',
+        type: 'jumpTo',
         uri,
         line,
         character,
@@ -679,13 +784,15 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
       }
 
       if (msg.type === 'themeColors') {
-        let themeStyle = document.getElementById('themeStyle');
-        if (!themeStyle) {
-          themeStyle = document.createElement('style');
-          themeStyle.id = 'themeStyle';
-          document.head.appendChild(themeStyle);
+        const themeStyle = document.getElementById('theme-tokens');
+        if (themeStyle) {
+          themeStyle.textContent = String(msg.css || '');
         }
-        themeStyle.textContent = String(msg.css || '');
+        return;
+      }
+
+      if (msg.type === 'interactionConfig') {
+        singleClickAction = normalizeSingleClickAction(msg.singleClickAction);
         return;
       }
 

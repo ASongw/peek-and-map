@@ -89,9 +89,9 @@ peek/
 | 方法 | 说明 |
 |------|------|
 | `notifyEditorChange()` | 记录最后已知编辑器 |
-| `setPeekView(pv)` | 注入 `PeekViewProvider` 引用，用于单击节点时直接更新预览 |
+| `setPeekView(pv)` | 注入 `PeekViewProvider` 引用，用于点击节点时直接更新预览 |
 | `_saveViewState(mode, direction)` | 持久化视图模式与图形方向到 `workspaceState` |
-| `pushInteractionConfig()` | 将 Map 图形视图交互灵敏度配置（滚动/拨动）推送到 webview |
+| `pushInteractionConfig()` | 将 Map 图形视图交互配置推送到 webview（滚动/拨动灵敏度 + 单击行为） |
 | `_doSearch()` | 按钮触发：分析光标所在符号的引用 |
 | `_resolveReferencingSymbols()` | 查找引用并定位其所在的封闭符号，构建引用树；包含路径去重（防止同一路径回环）以及“声明不被其定义回引”过滤规则 |
 | `_expandRef()` | 展开引用节点，递归加载子引用 |
@@ -124,8 +124,8 @@ peek/
 |------|------|
 | `search` | 触发符号分析 |
 | `expandRef` | 展开树/图节点 |
-| `jumpTo` | 双击：在编辑器中打开文件并定位（`preserveFocus: false`），同时通过 `peekLocation()` 更新 Peek View |
-| `peekOnly` | 单击：调用 `_peekView.peekLocation()` 直接更新 Peek View，不打开编辑器 |
+| `jumpTo` | 打开编辑器并定位（`preserveFocus: false`），同时通过 `peekLocation()` 更新 Peek View；默认用于双击，也可由 `mapView.singleClickAction` 用于单击 |
+| `peekOnly` | 仅调用 `_peekView.peekLocation()` 更新 Peek View，不打开编辑器；默认用于单击 |
 | `setViewState` | 保存当前 Map 视图状态（`mode` + `direction`） |
 
 ### `symbolSearchView.ts` — Symbol Search 面板
@@ -134,12 +134,17 @@ peek/
 
 | 方法 | 说明 |
 |------|------|
+| `setPeekView(pv)` | 注入 `PeekViewProvider` 引用，用于结果点击时直接更新 Peek |
 | `pushThemeColors()` | 推送主题 token 与符号类型颜色到 webview |
+| `pushInteractionConfig()` | 推送 Symbol Search 交互配置（结果单击行为）到 webview |
 | `_search()` | 调用 `vscode.executeWorkspaceSymbolProvider` 搜索符号，并回传结果列表 |
+| `_peekLocation()` | 仅更新 Peek View，不打开编辑器 |
 | `_openLocation()` | 打开符号所在文件并定位到具体行列 |
-| `_getHtml()` | 返回搜索框与结果列表的 webview UI，输入实时更新结果 |
+| `_getHtml()` | 返回搜索框与结果列表的 webview UI，输入实时更新结果；支持单击/双击分流 |
 
 ## 关键配置项
 
 - `mapView.wheelPanSensitivity`：Map 图形视图中滚轮滚动平移灵敏度（默认 `1`，用于普通滚轮与 `Shift+滚轮`）
 - `mapView.wheelTiltPanSensitivity`：Map 图形视图中鼠标滚轮左右拨动平移灵敏度（默认 `0.28`，用于 `deltaX`）
+- `mapView.singleClickAction`：Map 视图单击行为（默认 `peekOnly`；可选 `peekOnly` / `jumpTo`）
+- `symbolSearch.singleClickAction`：Symbol Search 结果单击行为（默认 `peekOnly`；可选 `peekOnly` / `jumpTo`）

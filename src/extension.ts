@@ -10,6 +10,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Allow MapViewProvider to update the peek view directly on single-click
   mapProvider.setPeekView(peekprovider);
+  symbolSearchProvider.setPeekView(peekprovider);
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
@@ -76,8 +77,15 @@ export function activate(context: vscode.ExtensionContext): void {
   // 配置变更时更新交互灵敏度
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('mapView.wheelPanSensitivity') || e.affectsConfiguration('mapView.wheelTiltPanSensitivity')) {
+      if (
+        e.affectsConfiguration('mapView.wheelPanSensitivity') ||
+        e.affectsConfiguration('mapView.wheelTiltPanSensitivity') ||
+        e.affectsConfiguration('mapView.singleClickAction')
+      ) {
         mapProvider.pushInteractionConfig();
+      }
+      if (e.affectsConfiguration('symbolSearch.singleClickAction')) {
+        symbolSearchProvider.pushInteractionConfig();
       }
     })
   );

@@ -69,9 +69,9 @@ Ctrl+点击符号  ──消息──▶  onDidReceiveMessage({ type:'ctrlClick'
 
 图形视图交互                  扩展宿主
 ────────────────              ──────────────────────────────────
-单击图形节点   ──消息──▶  onDidReceiveMessage({ type:'peekOnly', uri, line, character })
+单击图形节点   ──消息──▶  onDidReceiveMessage({ type:'peekOnly' 或 'jumpTo', uri, line, character })
                               └─ _peekView.peekLocation(uri, pos)
-                                 → Peek View 直接刷新，编辑器不变
+                      → Peek View 刷新（若为 jumpTo 则继续打开编辑器）
 
 双击图形节点   ──消息──▶  onDidReceiveMessage({ type:'jumpTo', uri, line, character })
                               ├─ _peekView.peekLocation(uri, pos)  → Peek View 同步刷新
@@ -208,11 +208,17 @@ Map View 会将当前 `mode`（`tree`/`graph`）与 `graph direction`（`up/down
 **16. 点击交互（树形列表与图形视图通用）**
 
 树形列表和图形视图均实现三种点击交互：
-- **单击**：发送 `peekOnly` 消息，扩展调用 `_peekView.peekLocation(uri, pos)` 直接将目标符号推入 Peek View，**不打开也不切换编辑器**
+- **单击**：由 `mapView.singleClickAction` 配置决定发送 `peekOnly` 或 `jumpTo`（默认 `peekOnly`）
 - **双击**：发送 `jumpTo` 消息，扩展先调用 `peekLocation()` 更新 Peek View，再以 `preserveFocus: false` 在编辑器中正式打开目标文件
 - **点击 `+/-` 按钮**（图形视图）：展开或折叠子节点，触发 `expandRef` 请求或本地折叠
 
 为避免单击和双击冲突，利用了 `click` 事件的 `e.detail` 属性区分。
+
+**16a. Symbol Search 点击交互**
+
+Symbol Search 结果列表同样采用“单击/双击分流”模式：
+- **单击**：由 `symbolSearch.singleClickAction` 配置决定发送 `peekOnly` 或 `jumpTo`（默认 `peekOnly`）
+- **双击**：固定发送 `jumpTo`，并同步更新 Peek View
 
 **17. 按钮与标签**
 

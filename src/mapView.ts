@@ -80,7 +80,13 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       type: 'interactionConfig',
       wheelPanSensitivity: this._getConfigNumber('wheelPanSensitivity', 1, 0.05, 5),
       wheelTiltPanSensitivity: this._getConfigNumber('wheelTiltPanSensitivity', 0.28, 0.05, 5),
+      singleClickAction: this._getSingleClickAction(),
     });
+  }
+
+  private _getSingleClickAction(): 'peekOnly' | 'jumpTo' {
+    const raw = vscode.workspace.getConfiguration('mapView').get<string>('singleClickAction', 'peekOnly');
+    return raw === 'jumpTo' ? 'jumpTo' : 'peekOnly';
   }
 
   private _getConfigNumber(key: string, fallback: number, min: number, max: number): number {
@@ -1059,6 +1065,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       if (msg.type === 'interactionConfig') {
         gWheelPanSensitivity = clampSensitivity(msg.wheelPanSensitivity, 1);
         gWheelTiltPanSensitivity = clampSensitivity(msg.wheelTiltPanSensitivity, 0.28);
+        singleClickAction = normalizeSingleClickAction(msg.singleClickAction);
         return;
       }
 
@@ -1319,12 +1326,11 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       const treeRow = e.target.closest('.tree-row');
       if (treeRow && !e.target.closest('.tree-toggle')) {
         if (e.detail === 1) {
-          vscodeApi.postMessage({
-            type: 'peekOnly',
-            uri: treeRow.dataset.uri,
-            line: parseInt(treeRow.dataset.callLine, 10),
-            character: parseInt(treeRow.dataset.callChar, 10),
-          });
+          postSingleClickNavigation(
+            treeRow.dataset.uri,
+            parseInt(treeRow.dataset.callLine, 10),
+            parseInt(treeRow.dataset.callChar, 10)
+          );
         }
         return;
       }
@@ -1362,6 +1368,20 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     let gCollapseAnimFrame = null;
     let gWheelPanSensitivity = 1;
     let gWheelTiltPanSensitivity = 0.28;
+    let singleClickAction = 'peekOnly';
+
+    function normalizeSingleClickAction(action) {
+      return action === 'jumpTo' ? 'jumpTo' : 'peekOnly';
+    }
+
+    function postSingleClickNavigation(uri, line, character) {
+      vscodeApi.postMessage({
+        type: singleClickAction === 'jumpTo' ? 'jumpTo' : 'peekOnly',
+        uri,
+        line,
+        character,
+      });
+    }
 
     const G_NODE_H = 24;
     const G_CALL_ROW_H = 14;  // extra height per call-site badge row
@@ -2694,7 +2714,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         const cl = (csIdx >= 0 && cs) ? cs[csIdx].callLine : (hit.data.callLine != null ? hit.data.callLine : hit.data.line);
         const cc = (csIdx >= 0 && cs) ? cs[csIdx].callCharacter : (hit.data.callCharacter != null ? hit.data.callCharacter : hit.data.character);
         const cu = (csIdx >= 0 && cs) ? cs[csIdx].uri : hit.data.uri;
-        vscodeApi.postMessage({ type: 'peekOnly', uri: cu, line: cl, character: cc });
+        postSingleClickNavigation(cu, cl, cc);
       }
     });
 
