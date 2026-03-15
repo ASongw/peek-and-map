@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getNonce } from './utils';
-import { generateThemeTokenCss, generateSymbolKindCss } from './theme';
+import { buildKindIconFunction, getThemeColorsCss, symbolKindToName } from './viewCommon';
 import { PeekViewProvider } from './peekView';
 
 interface SymbolSearchResultItem {
@@ -61,7 +61,7 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
     if (!this._view) { return; }
     this._view.webview.postMessage({
       type: 'themeColors',
-      css: generateThemeTokenCss() + generateSymbolKindCss(),
+      css: getThemeColorsCss(),
     });
   }
 
@@ -296,40 +296,12 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
   }
 
   private _kindToString(kind: vscode.SymbolKind): string {
-    switch (kind) {
-      case vscode.SymbolKind.File: return 'File';
-      case vscode.SymbolKind.Module: return 'Module';
-      case vscode.SymbolKind.Namespace: return 'Namespace';
-      case vscode.SymbolKind.Package: return 'Package';
-      case vscode.SymbolKind.Class: return 'Class';
-      case vscode.SymbolKind.Method: return 'Method';
-      case vscode.SymbolKind.Property: return 'Property';
-      case vscode.SymbolKind.Field: return 'Field';
-      case vscode.SymbolKind.Constructor: return 'Constructor';
-      case vscode.SymbolKind.Enum: return 'Enum';
-      case vscode.SymbolKind.Interface: return 'Interface';
-      case vscode.SymbolKind.Function: return 'Function';
-      case vscode.SymbolKind.Variable: return 'Variable';
-      case vscode.SymbolKind.Constant: return 'Constant';
-      case vscode.SymbolKind.String: return 'String';
-      case vscode.SymbolKind.Number: return 'Number';
-      case vscode.SymbolKind.Boolean: return 'Boolean';
-      case vscode.SymbolKind.Array: return 'Array';
-      case vscode.SymbolKind.Object: return 'Object';
-      case vscode.SymbolKind.Key: return 'Key';
-      case vscode.SymbolKind.Null: return 'Null';
-      case vscode.SymbolKind.EnumMember: return 'EnumMember';
-      case vscode.SymbolKind.Struct: return 'Struct';
-      case vscode.SymbolKind.Event: return 'Event';
-      case vscode.SymbolKind.Operator: return 'Operator';
-      case vscode.SymbolKind.TypeParameter: return 'TypeParameter';
-      default: return 'Symbol';
-    }
+    return symbolKindToName(kind);
   }
 
   private _getHtml(webview: vscode.Webview): string {
     const nonce = getNonce();
-    const initialThemeCss = generateThemeTokenCss() + generateSymbolKindCss();
+    const initialThemeCss = getThemeColorsCss();
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -658,26 +630,7 @@ export class SymbolSearchViewProvider implements vscode.WebviewViewProvider {
         + '<span style="color:' + memberColor + '">' + escapeHtml(part.member) + '</span>';
     }
 
-    function kindIcon(kind) {
-      const icons = {
-        'Function': '💿',
-        'Method': '📀',
-        'Class': '📱',
-        'Interface': '🔗',
-        'Variable': '🔷',
-        'Constant': '⭐',
-        'Property': '🟢',
-        'Field': '🟠',
-        'Enum': '🏷️',
-        'Module': '📦',
-        'Namespace': '📃',
-        'Struct': '💲',
-        'Constructor': '📲',
-        'File': '📄',
-        'Global': '🔵',
-      };
-      return icons[kind] || '•';
-    }
+    ${buildKindIconFunction('kindIcon')}
 
     function sendQuery() {
       requestId += 1;

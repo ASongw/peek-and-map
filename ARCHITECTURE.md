@@ -7,6 +7,7 @@ peek/
 │   ├── constants.ts          # 常量：语言映射表、Prism→TextMate scope 映射表
 │   ├── types.ts              # 共享接口：ContextInfo、TreeNodeData、TokenColorRule
 │   ├── theme.ts              # 主题颜色提取：JSONC 解析、主题文件加载、CSS 生成
+│   ├── viewCommon.ts         # 三视图共享逻辑：主题样式、SymbolKind 名称、emoji 映射
 │   ├── utils.ts              # 通用工具函数（getNonce 等）
 │   ├── peekView.ts       # PeekViewProvider — 代码预览面板
 │   ├── mapView.ts        # MapViewProvider — 引用/调用关系面板
@@ -16,6 +17,7 @@ peek/
 │   ├── constants.js
 │   ├── types.js
 │   ├── theme.js
+│   ├── viewCommon.js
 │   ├── utils.js
 │   ├── peekView.js
 │   ├── mapView.js
@@ -59,8 +61,14 @@ peek/
 - `resolveActiveThemeTokenColors()`：根据 `workbench.colorTheme` 找到主题扩展并解析
 - `findBestSetting()`：TextMate 前缀匹配，为目标 scope 找最佳颜色
 - `SYMBOL_KIND_TO_TM`：符号类型（Function/Class/Method…）→ TextMate scope 映射表
-- `generateSymbolKindCss()`：生成 `--peek-kind-*` CSS 自定义属性，供 Peek View 和 Map View 的符号徽章使用真实主题颜色
+- `generateSymbolKindCss()`：生成 `--peek-kind-*` CSS 自定义属性，供 Peek / Map / Symbol Search 三个视图使用真实主题颜色
 - `generateThemeTokenCss()`：生成 Prism token 的动态 CSS
+
+### `viewCommon.ts` — 视图共享逻辑
+
+- `getThemeColorsCss()`：统一拼接 `generateThemeTokenCss() + generateSymbolKindCss()`，供三个视图推送与初始化主题样式
+- `symbolKindToName()`：统一 `vscode.SymbolKind -> string` 映射，避免各视图重复维护
+- `buildKindIconFunction()`：统一生成 webview 端 `kind -> emoji` 函数代码，确保三个视图图标一致
 
 ### `utils.ts` — 工具函数
 
@@ -82,6 +90,8 @@ peek/
 | `_resetDedup()` | 清除去重缓存，强制下次刷新 |
 | `_getHtml()` | 返回完整的 webview HTML/CSS/JS |
 
+> 说明：Peek View 的符号类型名称映射、顶部 emoji 图标函数与主题样式拼接已复用 `viewCommon.ts`。
+
 ### `mapView.ts` — Map View 面板
 
 `MapViewProvider` 实现 `WebviewViewProvider`，提供符号引用关系分析，并支持树形列表与图形两种视图模式（图形支持四个方向）：
@@ -98,6 +108,8 @@ peek/
 | `_getDocumentSymbols()` | 获取文档符号列表 |
 | `_deepestContaining()` | 递归查找最内层包含指定位置的符号 |
 | `_getHtml()` | 返回 Map View 的 webview HTML/CSS/JS |
+
+> 说明：Map View 的 `SymbolKind` 名称映射、节点 emoji 图标函数与主题样式拼接已复用 `viewCommon.ts`。
 
 #### Webview 端关键函数（内联 JS）
 
@@ -141,6 +153,8 @@ peek/
 | `_peekLocation()` | 仅更新 Peek View，不打开编辑器 |
 | `_openLocation()` | 打开符号所在文件并定位到具体行列 |
 | `_getHtml()` | 返回搜索框与结果列表的 webview UI，输入实时更新结果；支持单击/双击分流 |
+
+> 说明：Symbol Search 的 `SymbolKind` 名称映射、列表 emoji 图标函数与主题样式拼接已复用 `viewCommon.ts`。
 
 ## 关键配置项
 

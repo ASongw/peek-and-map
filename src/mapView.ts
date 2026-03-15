@@ -3,7 +3,7 @@ import * as path from 'path';
 import { TreeNodeData } from './types';
 import { getNonce } from './utils';
 import { PeekViewProvider } from './peekView';
-import { generateThemeTokenCss, generateSymbolKindCss } from './theme';
+import { buildKindIconFunction, getThemeColorsCss, symbolKindToName } from './viewCommon';
 
 export class MapViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'mapView.view';
@@ -70,7 +70,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
   /** Push current theme symbol-kind colors to the webview. */
   pushThemeColors(): void {
     if (!this._view) { return; }
-    this._view.webview.postMessage({ type: 'themeColors', css: generateThemeTokenCss() + generateSymbolKindCss() });
+    this._view.webview.postMessage({ type: 'themeColors', css: getThemeColorsCss() });
   }
 
   /** Push map interaction sensitivities to the webview. */
@@ -607,23 +607,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
   }
 
   private _symbolKindName(kind: vscode.SymbolKind): string {
-    const names: Partial<Record<vscode.SymbolKind, string>> = {
-      [vscode.SymbolKind.File]: 'File',
-      [vscode.SymbolKind.Module]: 'Module',
-      [vscode.SymbolKind.Namespace]: 'Namespace',
-      [vscode.SymbolKind.Class]: 'Class',
-      [vscode.SymbolKind.Method]: 'Method',
-      [vscode.SymbolKind.Property]: 'Property',
-      [vscode.SymbolKind.Field]: 'Field',
-      [vscode.SymbolKind.Constructor]: 'Constructor',
-      [vscode.SymbolKind.Enum]: 'Enum',
-      [vscode.SymbolKind.Interface]: 'Interface',
-      [vscode.SymbolKind.Function]: 'Function',
-      [vscode.SymbolKind.Variable]: 'Variable',
-      [vscode.SymbolKind.Constant]: 'Constant',
-      [vscode.SymbolKind.Struct]: 'Struct',
-    };
-    return names[kind] ?? 'Symbol';
+    return symbolKindToName(kind);
   }
 
   private _symbolKindNameWithOwner(
@@ -652,6 +636,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
 
   private _getHtml(webview: vscode.Webview): string {
     const nonce = getNonce();
+    const initialThemeCss = getThemeColorsCss();
 
     return /* html */`<!DOCTYPE html>
 <html lang="zh">
@@ -912,7 +897,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     }
   </style>
   <!-- Dynamic theme symbol-kind colors (updated via postMessage on theme change) -->
-  <style id="theme-tokens">${generateThemeTokenCss() + generateSymbolKindCss()}</style>
+  <style id="theme-tokens">${initialThemeCss}</style>
 </head>
 <body>
   <div id="header">
@@ -1506,26 +1491,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     }
 
     /* Return icon-like symbol for a kind */
-    function nodeKindIcon(kind) {
-      const icons = {
-        'Function':    '💿',
-        'Method':      '📀',
-        'Class':       '📱',
-        'Interface':   '🔗',
-        'Variable':    '🔷',
-        'Constant':    '⭐',
-        'Property':    '🟢',
-        'Field':       '🟠',
-        'Enum':        '🏷️',
-        'Module':      '📦',
-        'Namespace':   '📃',
-        'Struct':      '💲',
-        'Constructor': '📲',
-        'File':        '📄',
-        'Global':      '🔵',
-      };
-      return icons[kind] || '•';
-    }
+    ${buildKindIconFunction('nodeKindIcon')}
 
     function graphNodeCanToggle(node) {
       if (!node) return false;

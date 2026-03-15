@@ -3,7 +3,7 @@ import * as path from 'path';
 import { LANG_MAP } from './constants';
 import { ContextInfo } from './types';
 import { getNonce } from './utils';
-import { generateThemeTokenCss, generateSymbolKindCss } from './theme';
+import { buildKindIconFunction, getThemeColorsCss, symbolKindToName } from './viewCommon';
 
 export class PeekViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'peekView.view';
@@ -39,7 +39,7 @@ export class PeekViewProvider implements vscode.WebviewViewProvider {
     if (!this._view) { return; }
     this._view.webview.postMessage({
       type: 'themeColors',
-      css: generateThemeTokenCss() + generateSymbolKindCss(),
+      css: getThemeColorsCss(),
     });
   }
 
@@ -481,23 +481,7 @@ export class PeekViewProvider implements vscode.WebviewViewProvider {
   }
 
   private _kindName(kind: vscode.SymbolKind): string {
-    const names: Partial<Record<vscode.SymbolKind, string>> = {
-      [vscode.SymbolKind.File]: 'File',
-      [vscode.SymbolKind.Module]: 'Module',
-      [vscode.SymbolKind.Namespace]: 'Namespace',
-      [vscode.SymbolKind.Class]: 'Class',
-      [vscode.SymbolKind.Method]: 'Method',
-      [vscode.SymbolKind.Property]: 'Property',
-      [vscode.SymbolKind.Field]: 'Field',
-      [vscode.SymbolKind.Constructor]: 'Constructor',
-      [vscode.SymbolKind.Enum]: 'Enum',
-      [vscode.SymbolKind.Interface]: 'Interface',
-      [vscode.SymbolKind.Function]: 'Function',
-      [vscode.SymbolKind.Variable]: 'Variable',
-      [vscode.SymbolKind.Constant]: 'Constant',
-      [vscode.SymbolKind.Struct]: 'Struct',
-    };
-    return names[kind] ?? 'Symbol';
+    return symbolKindToName(kind);
   }
 
   private _sendEmpty(msg: string): void {
@@ -523,7 +507,7 @@ export class PeekViewProvider implements vscode.WebviewViewProvider {
     const autoloader  = webview.asWebviewUri(vscode.Uri.joinPath(mediaDir, 'prism-autoloader.min.js'));
     // Language components path for the autoloader (trailing slash required)
     const componentsUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaDir, 'components')).toString() + '/';
-    const initialThemeCss = generateThemeTokenCss() + generateSymbolKindCss();
+    const initialThemeCss = getThemeColorsCss();
 
     return /* html */`<!DOCTYPE html>
 <html lang="zh">
@@ -773,25 +757,7 @@ export class PeekViewProvider implements vscode.WebviewViewProvider {
     });
 
     // ── Kind symbol / color helpers (mirrors mapView) ───────────────────────
-    function kindSymbol(kind) {
-      const map = {
-        'Function':    '💿',
-        'Method':      '📀',
-        'Class':       '📱',
-        'Interface':   '🔗',
-        'Variable':    '🔷',
-        'Constant':    '⭐',
-        'Property':    '🟢',
-        'Field':       '🟠',
-        'Enum':        '🏷️',
-        'Module':      '📦',
-        'Namespace':   '📃',
-        'Struct':      '💲',
-        'Constructor': '📲',
-        'File':        '📄',
-      };
-      return map[kind] || '•';
-    }
+    ${buildKindIconFunction('kindSymbol')}
 
     function kindColor(kind) {
       // Read the CSS var injected from the real TextMate theme (see generateSymbolKindCss).
