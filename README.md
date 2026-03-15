@@ -1,6 +1,6 @@
 # Peek and Map
 
-一个 **99% AI + 1% Idea** 的 VS Code 插件，提供 **Peek View**、**Map View** 和 **Symbol Search** 三个视图，提供部分source insight的体验。
+一个 **99% AI + 1% Idea** 的 VS Code 插件，实现 **Peek View**、**Map View** 和 **Symbol Search** 三个视图，提供部分source insight的体验。
 
 - **Peek View**：实时展示光标处符号的定义体，跟随编辑器语法高亮、支持视图内跳转、前进后退导航和快速字体调整。
 - **Map View**：分析光标处符号的引用关系，支持 `Outline` / `Graph` 两种视图；`Graph` 支持上下左右四个生长方向，支持递归展开和跳转。
@@ -70,8 +70,8 @@
 | `peekView.contextPadding` | number | 30 | 在符号定义体**上方和下方**各额外显示的行数（范围 0–500）；设置大范围方便查看更多上下文，设置 0 则仅显示选中的符号定义。 |
 | `mapView.wheelPanSensitivity` | number | 1 | Map 图形视图中滚轮滚动平移灵敏度（普通滚轮上下平移与 `Shift+滚轮` 左右平移）。 |
 | `mapView.wheelTiltPanSensitivity` | number | 0.3 | Map 图形视图中鼠标滚轮左右拨动（水平滚轮）平移灵敏度。 |
-| `mapView.singleClickAction` | string | `peekOnly` | Map 视图节点单击行为：`peekOnly`（仅更新 Peek）或 `jumpTo`（同时更新 Peek 并更新编辑器）。 |
-| `symbolSearch.singleClickAction` | string | `peekOnly` | Symbol Search 结果单击行为：`peekOnly`（仅更新 Peek）或 `jumpTo`（同时更新 Peek 并更新编辑器）。 |
+| `mapView.singleClickAction` | string | `peekOnly` | Map 视图节点单击行为：`peekOnly`（仅更新 Peek）或 `jumpTo`（同时更新 Peek 和编辑器）。 |
+| `symbolSearch.singleClickAction` | string | `peekOnly` | Symbol Search 结果单击行为：`peekOnly`（仅更新 Peek）或 `jumpTo`（同时更新 Peek 和编辑器）。 |
 
 ---
 ## 使用建议
