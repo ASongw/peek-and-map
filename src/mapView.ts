@@ -18,6 +18,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
   private _instanceSessions = new Map<string, {
     refNodeMap: Map<string, { uri: vscode.Uri; position: vscode.Position; pathSymbolKeys: string[] }>;
     nodeCounter: number;
+    includeGlob: string;
+    excludeGlob: string;
   }>();
   private _peekView?: PeekViewProvider;
   private _viewMode: 'tree' | 'graph';
@@ -61,12 +63,16 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
   private _getOrCreateSession(instanceId: string): {
     refNodeMap: Map<string, { uri: vscode.Uri; position: vscode.Position; pathSymbolKeys: string[] }>;
     nodeCounter: number;
+    includeGlob: string;
+    excludeGlob: string;
   } {
     let session = this._instanceSessions.get(instanceId);
     if (!session) {
       session = {
         refNodeMap: new Map<string, { uri: vscode.Uri; position: vscode.Position; pathSymbolKeys: string[] }>(),
         nodeCounter: 0,
+        includeGlob: '',
+        excludeGlob: '',
       };
       this._instanceSessions.set(instanceId, session);
     }
@@ -149,7 +155,11 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
           break;
 
         case 'search':
-          await this._doSearch(this._normalizeInstanceId(msg.instanceId));
+          await this._doSearch(
+            this._normalizeInstanceId(msg.instanceId),
+            msg.includeGlob,
+            msg.excludeGlob
+          );
           break;
 
         case 'expandRef':
@@ -239,9 +249,11 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
 
   // ── Search (button-triggered) ──────────────────────────────────────────────
 
-  private async _doSearch(instanceId: string): Promise<void> {
+  private async _doSearch(instanceId: string, includeGlobRaw?: unknown, excludeGlobRaw?: unknown): Promise<void> {
     if (!this._view) { return; }
     const session = this._getOrCreateSession(instanceId);
+    session.includeGlob = this._normalizeGlobPattern(includeGlobRaw);
+    session.excludeGlob = this._normalizeGlobPattern(excludeGlobRaw);
 
     const editor = vscode.window.activeTextEditor ?? this._lastKnownEditor;
     if (!editor) {
@@ -349,6 +361,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     session: {
       refNodeMap: Map<string, { uri: vscode.Uri; position: vscode.Position; pathSymbolKeys: string[] }>;
       nodeCounter: number;
+      includeGlob: string;
+      excludeGlob: string;
     },
     uri: vscode.Uri,
     pos: vscode.Position,
@@ -396,6 +410,10 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     const firstSeenKeys = new Set<string>();
 
     for (const loc of locs) {
+      if (!this._passesFileFilter(loc.uri, session.includeGlob, session.excludeGlob)) {
+        continue;
+      }
+
       let refDoc: vscode.TextDocument;
       try {
         refDoc = await vscode.workspace.openTextDocument(loc.uri);
@@ -671,6 +689,96 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     return path.basename(fsPath);
   }
 
+  private _normalizeGlobPattern(value: unknown): string {
+    return typeof value === 'string' ? value.trim() : '';
+  }
+
+  private _passesFileFilter(uri: vscode.Uri, includeGlob: string, excludeGlob: string): boolean {
+    const normalizedPath = vscode.workspace.asRelativePath(uri, false).replace(/\\/g, '/');
+    const fileName = path.basename(uri.fsPath);
+
+    const includeTokens = this._splitGlobList(includeGlob);
+    const excludeTokens = this._splitGlobList(excludeGlob);
+
+    if (includeTokens.length > 0 && !includeTokens.some((token) => this._globTokenMatches(token, normalizedPath, fileName))) {
+      return false;
+    }
+    if (excludeTokens.some((token) => this._globTokenMatches(token, normalizedPath, fileName))) {
+      return false;
+    }
+    return true;
+  }
+
+  private _splitGlobList(raw: string): string[] {
+    if (!raw.trim()) { return []; }
+    return raw
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  private _globTokenMatches(token: string, normalizedPath: string, fileName: string): boolean {
+    const regex = this._globToRegExp(token);
+    if (token.includes('/')) {
+      return regex.test(normalizedPath);
+    }
+    return regex.test(normalizedPath) || regex.test(fileName);
+  }
+
+  private _globToRegExp(glob: string): RegExp {
+    let i = 0;
+    const source = glob.replace(/\\/g, '/').trim();
+    let out = '^';
+
+    while (i < source.length) {
+      const ch = source[i];
+
+      if (ch === '*') {
+        if (source[i + 1] === '*') {
+          out += '.*';
+          i += 2;
+          continue;
+        }
+        out += '[^/]*';
+        i += 1;
+        continue;
+      }
+
+      if (ch === '?') {
+        out += '[^/]';
+        i += 1;
+        continue;
+      }
+
+      if (ch === '{') {
+        const end = source.indexOf('}', i + 1);
+        if (end > i + 1) {
+          const body = source.slice(i + 1, end);
+          const parts = body
+            .split(',')
+            .map((part) => part.trim())
+            .filter(Boolean)
+            .map((part) => part.replace(/[.+^${}()|[\]\\]/g, '\\$&'));
+          if (parts.length > 0) {
+            out += '(?:' + parts.join('|') + ')';
+            i = end + 1;
+            continue;
+          }
+        }
+      }
+
+      out += ch.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+      i += 1;
+    }
+
+    out += '$';
+    try {
+      return new RegExp(out);
+    } catch {
+      return /^$/;
+    }
+  }
+
   private _symbolKindName(kind: vscode.SymbolKind): string {
     return symbolKindToName(kind);
   }
@@ -917,6 +1025,22 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       font-size: 14px;
       line-height: 1;
     }
+    #file-filters-toggle {
+      cursor: pointer;
+      padding: 2px 8px;
+      font-size: 12px;
+      border: 1px solid var(--vscode-panel-border, #333);
+      border-radius: 3px;
+      background: var(--vscode-sideBarSectionHeader-background, #252526);
+      color: var(--vscode-foreground, #d4d4d4);
+      flex-shrink: 0;
+      line-height: 1.4;
+      white-space: nowrap;
+    }
+    #file-filters-toggle.active {
+      background: var(--vscode-list-activeSelectionBackground, rgba(0, 122, 204, 0.35));
+      color: var(--vscode-list-activeSelectionForeground, #fff);
+    }
     #view-tabs {
       display: inline-flex;
       border: 1px solid var(--vscode-panel-border, #333);
@@ -962,6 +1086,36 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       padding: 0 6px;
     }
     #header-spacer { flex: 1; }
+
+    #file-filters {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 4px 8px;
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--vscode-panel-border, #333);
+      background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background, #252526));
+      align-items: center;
+      flex-shrink: 0;
+    }
+    #file-filters[hidden] {
+      display: none;
+    }
+    #file-filters label {
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground, #858585);
+      white-space: nowrap;
+    }
+    #file-filters input {
+      height: 22px;
+      width: 100%;
+      min-width: 0;
+      font-size: 12px;
+      border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, #333));
+      border-radius: 3px;
+      background: var(--vscode-input-background, var(--vscode-editor-background, #1e1e1e));
+      color: var(--vscode-input-foreground, var(--vscode-foreground, #d4d4d4));
+      padding: 0 6px;
+    }
 
     /* ── Content ────────────────────────────────────────────────── */
     #empty-msg {
@@ -1120,6 +1274,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     </div>
     <div id="header">
       <button id="search-btn" title="Analyze symbol at cursor"><span class="btn-icon">🔍</span> Analysis</button>
+      <button id="file-filters-toggle" aria-expanded="false" title="Toggle file include/exclude filters">Files ▸</button>
       <div id="view-tabs" role="tablist" aria-label="Map View Mode">
         <button id="view-tab-tree" class="view-tab active" role="tab" aria-selected="true" title="Outline view">Outline</button>
         <button id="view-tab-graph" class="view-tab" role="tab" aria-selected="false" title="Graph view">Graph</button>
@@ -1134,6 +1289,12 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         </select>
       </div>
       <span id="header-spacer"></span>
+    </div>
+    <div id="file-filters" hidden>
+      <label for="include-glob">files to include</label>
+      <input id="include-glob" type="text" placeholder="e.g. src/**" />
+      <label for="exclude-glob">files to exclude</label>
+      <input id="exclude-glob" type="text" placeholder="e.g. **/*.test.ts" />
     </div>
     <div id="empty-msg">Place cursor on a symbol, then click "Analysis"</div>
     <div id="content" style="display:none">
@@ -1204,8 +1365,12 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     const moveOtherPaneMenuItem = instanceContextMenu.querySelector('[data-action="move-other-pane"]');
     const copyOtherPaneMenuItem = instanceContextMenu.querySelector('[data-action="copy-other-pane"]');
     const searchBtn    = paneRoot.querySelector('#search-btn');
+    const fileFiltersToggle = paneRoot.querySelector('#file-filters-toggle');
     const viewTabTree  = paneRoot.querySelector('#view-tab-tree');
     const viewTabGraph = paneRoot.querySelector('#view-tab-graph');
+    const fileFilters = paneRoot.querySelector('#file-filters');
+    const includeGlobInput = paneRoot.querySelector('#include-glob');
+    const excludeGlobInput = paneRoot.querySelector('#exclude-glob');
     const graphDirectionWrap = paneRoot.querySelector('#graph-direction-wrap');
     const graphDirectionSelect = paneRoot.querySelector('#graph-direction');
     const graphContainer = paneRoot.querySelector('#graph-container');
@@ -1239,7 +1404,22 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         nodeChildrenCache: new Map(),
         expandedNodeIds: new Set(),
         lastUpdateData: null,
+        includeGlob: '',
+        excludeGlob: '',
+        filtersExpanded: false,
       };
+    }
+
+    function normalizeGlobInput(value) {
+      return typeof value === 'string' ? value.trim() : '';
+    }
+
+    function applyFileFilterUi(expanded) {
+      const isExpanded = !!expanded;
+      fileFilters.hidden = !isExpanded;
+      fileFiltersToggle.classList.toggle('active', isExpanded);
+      fileFiltersToggle.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+      fileFiltersToggle.textContent = isExpanded ? 'Files ▾' : 'Files ▸';
     }
 
     function cloneNodeChildrenCache(sourceMap) {
@@ -1287,6 +1467,9 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       viewMode = state.viewMode;
       graphDirection = state.graphDirection;
       lastUpdateData = state.lastUpdateData;
+      includeGlobInput.value = state.includeGlob || '';
+      excludeGlobInput.value = state.excludeGlob || '';
+      applyFileFilterUi(state.filtersExpanded);
     }
 
     function syncActiveState() {
@@ -1298,6 +1481,9 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       state.loadedNodes = loadedNodes;
       state.nodeChildrenCache = nodeChildrenCache;
       state.expandedNodeIds = expandedNodeIds;
+      state.includeGlob = normalizeGlobInput(includeGlobInput.value);
+      state.excludeGlob = normalizeGlobInput(excludeGlobInput.value);
+      state.filtersExpanded = !fileFilters.hidden;
     }
 
     function renderInstanceTabs() {
@@ -1375,6 +1561,9 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         state.nodeChildrenCache = cloneNodeChildrenCache(opts.fromState.nodeChildrenCache || new Map());
         state.expandedNodeIds = new Set(opts.fromState.expandedNodeIds || []);
         state.lastUpdateData = cloneLastUpdateData(opts.fromState.lastUpdateData);
+        state.includeGlob = normalizeGlobInput(opts.fromState.includeGlob || '');
+        state.excludeGlob = normalizeGlobInput(opts.fromState.excludeGlob || '');
+        state.filtersExpanded = !!opts.fromState.filtersExpanded;
       }
       instanceStateMap.set(id, state);
       insertInstanceOrder(id, opts.afterInstanceId);
@@ -1629,8 +1818,36 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     graphDirectionSelect.addEventListener('change', () => setViewState('graph', graphDirectionSelect.value));
 
     // ── Search button ────────────────────────────────────────────────────
+    fileFiltersToggle.addEventListener('click', () => {
+      applyFileFilterUi(fileFilters.hidden);
+      syncActiveState();
+    });
+
+    includeGlobInput.addEventListener('input', () => {
+      syncActiveState();
+    });
+
+    excludeGlobInput.addEventListener('input', () => {
+      syncActiveState();
+    });
+
+    includeGlobInput.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') { return; }
+      searchBtn.click();
+    });
+
+    excludeGlobInput.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') { return; }
+      searchBtn.click();
+    });
+
     searchBtn.addEventListener('click', () => {
-      vscodeApi.postMessage({ type: 'search', instanceId: activeInstanceId });
+      const includeGlob = normalizeGlobInput(includeGlobInput.value);
+      const excludeGlob = normalizeGlobInput(excludeGlobInput.value);
+      includeGlobInput.value = includeGlob;
+      excludeGlobInput.value = excludeGlob;
+      syncActiveState();
+      vscodeApi.postMessage({ type: 'search', instanceId: activeInstanceId, includeGlob, excludeGlob });
     });
 
     // ── Messages from extension ──────────────────────────────────────────
