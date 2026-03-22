@@ -96,6 +96,8 @@ peek/
 
 > 补充：当 definition provider 返回多个结果时，Peek View 会在左侧展示候选列表；点击或使用 `↑/↓/Home/End` 可切换候选，右侧预览随之更新。候选列表与预览之间的分隔条可拖动，宽度会在 webview state 中持久化。
 
+> Map View 的 Outline 列表同样提供可拖动列分割线：名称 / 文件 / 行号三列之间均可拖动，拖动时仅调整相邻两列，另一侧边界保持不动；当前点击行会在渲染后保持高亮。
+
 ### `mapView.ts` — Map View 面板
 
 `MapViewProvider` 实现 `WebviewViewProvider`，提供符号引用关系分析，并支持树形列表与图形两种视图模式（图形支持四个方向）；Webview 顶部支持多实例标签并行分析：
@@ -129,7 +131,7 @@ peek/
 | `restoreSinglePane()` | 合并分区时自动迁移其他分区实例到保留分区，再回到单分区 |
 | `swapPanePositions()` | 交换两个分区在界面中的位置 |
 | `toggleTreeNode()` / `toggleGraphNode()` | 展开/收起统一逻辑；支持 `Ctrl+单击` 节点切换展开状态 |
-| `renderTreeList()` / `renderTreeNodeHtml()` | 渲染树形列表节点（SVG 箭头、类型徽章、名称、位置） |
+| `renderTreeList()` / `renderTreeNodeHtml()` | 渲染树形列表节点（SVG 箭头、类型徽章、名称、位置）；列表采用列布局，名称 / 文件 / 行号三列之间带可拖动分割线，列宽按实例保存并恢复；点击行会显示当前选中态 |
 | `stripParams(name)` | 去除函数参数：`"foo(a, b)"` → `"foo"` |
 | `graphBuildFromData(d)` | 从搜索结果构建图形节点/边数据，根符号作为真实节点参与渲染，自动合并同符号的重复引用节点 |
 | `mergeItemsBySymbol(items)` | 将多个引用同一封闭符号的 TreeNodeData 合并为单个图形节点，收集所有调用位置（callSites） |
@@ -157,7 +159,7 @@ peek/
 | `setViewState` | 保存当前 Map 视图状态（`mode` + `direction`） |
 | `closeInstance` | 关闭实例时释放 Extension 端该实例缓存会话 |
 
-> 交互补充：分区菜单可由视图空白处或 Graph canvas 空白处右键触发；命中图形节点时不会弹出分区菜单。
+> 交互补充：分区菜单可由视图空白处或 Graph canvas 空白处右键触发；命中图形节点时不会弹出分区菜单。Map View 的主内容区背景继承标签栏背景，以保证各子区域视觉统一。
 
 | 消息类型（Extension→Webview） | 说明 |
 |------|------|

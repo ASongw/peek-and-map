@@ -856,6 +856,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      background: var(--vscode-sideBar-background, #252526);
     }
     #pane-host.mode-horizontal .pane-shell + .pane-shell {
       border-top: 1px solid var(--vscode-panel-border, #333);
@@ -1131,6 +1132,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     #content {
       flex: 1;
       overflow: auto;
+      background: inherit;
     }
 
     .section { display: none; }
@@ -1139,16 +1141,28 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     /* ── Tree items ─────────────────────────────────────────────── */
     .tree-node { /* container for row + children */ }
     .tree-row {
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(0, var(--mapview-name-col-width, 1fr)) 8px var(--mapview-file-col-width, 140px) 8px var(--mapview-line-col-width, 50px);
       align-items: center;
       padding: 2px 0;
       cursor: pointer;
       transition: background 0.1s;
       white-space: nowrap;
-      overflow: hidden;
+      overflow: visible;
     }
     .tree-row:hover {
       background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.05));
+    }
+    .tree-row.selected {
+      background: var(--vscode-list-activeSelectionBackground, rgba(0, 122, 204, 0.28));
+      color: var(--vscode-list-activeSelectionForeground, #fff);
+    }
+    .tree-row.selected:hover {
+      background: var(--vscode-list-activeSelectionBackground, rgba(0, 122, 204, 0.28));
+    }
+    .tree-row.selected .col-file,
+    .tree-row.selected .col-line {
+      color: var(--vscode-list-activeSelectionForeground, #fff);
     }
     .tree-toggle {
       display: inline-flex;
@@ -1203,7 +1217,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       overflow: hidden;
     }
     .col-file {
-      width: 140px;
+      width: var(--mapview-file-col-width, 140px);
       flex-shrink: 0;
       font-size: 12px;
       color: var(--vscode-descriptionForeground, #858585);
@@ -1212,15 +1226,49 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       padding: 0 8px;
     }
     .col-line {
-      width: 50px;
+      width: var(--mapview-line-col-width, 50px);
       flex-shrink: 0;
       font-size: 12px;
       color: var(--vscode-descriptionForeground, #858585);
       text-align: right;
       padding-right: 8px;
     }
+    .col-splitter {
+      width: 8px;
+      flex-shrink: 0;
+      align-self: stretch;
+      height: 100%;
+      position: relative;
+      user-select: none;
+      touch-action: none;
+    }
+    .tree-row .col-splitter {
+      min-height: 100%;
+    }
+    .table-header .col-splitter {
+      cursor: col-resize;
+    }
+    .tree-row .col-splitter {
+      cursor: col-resize;
+    }
+    .col-splitter::before {
+      content: '';
+      position: absolute;
+      top: -2px;
+      bottom: -2px;
+      left: 50%;
+      width: 1px;
+      transform: translateX(-50%);
+      background: var(--vscode-panel-border, #333);
+      opacity: 0.9;
+    }
+    .table-header .col-splitter:hover::before,
+    .pane-shell.dragging-columns .col-splitter::before {
+      background: var(--vscode-focusBorder, #007acc);
+    }
     .table-header {
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(0, var(--mapview-name-col-width, 1fr)) 8px var(--mapview-file-col-width, 140px) 8px var(--mapview-line-col-width, 50px);
       padding: 3px 0;
       border-bottom: 1px solid var(--vscode-panel-border, #333);
       font-size: 11px;
@@ -1228,11 +1276,15 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       color: var(--vscode-descriptionForeground, #858585);
       position: sticky;
       top: 0;
-      background: var(--vscode-panel-background, #1e1e1e);
+      background: var(--vscode-sideBar-background, #252526);
       z-index: 1;
       user-select: none;
     }
     .table-header .col-name { padding-left: 28px; }
+    .tree-row .col-name { min-width: 0; }
+    .pane-shell.dragging-columns {
+      cursor: col-resize;
+    }
     .tree-children { /* nested children container */ }
 
     /* ── Leaf (non-expandable) tree items ────────────────────────── */
@@ -1255,11 +1307,13 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       flex: 1;
       overflow: hidden;
       display: none;
+      background: inherit;
     }
     #graph-canvas {
       width: 100%;
       height: 100%;
       display: block;
+      background: inherit;
     }
   </style>
   <!-- Dynamic theme symbol-kind colors (updated via postMessage on theme change) -->
@@ -1300,7 +1354,9 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     <div id="content" style="display:none">
       <div class="table-header">
         <div class="col-name">Symbol</div>
+        <div class="col-splitter" data-splitter="file" role="separator" aria-orientation="vertical" aria-label="Adjust file column width"></div>
         <div class="col-file">File</div>
+        <div class="col-splitter" data-splitter="line" role="separator" aria-orientation="vertical" aria-label="Adjust line column width"></div>
         <div class="col-line">Line</div>
       </div>
       <div class="section active" id="sec-references"></div>
@@ -1377,6 +1433,16 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     const graphCanvas   = paneRoot.querySelector('#graph-canvas');
     const refSection    = paneRoot.querySelector('#sec-references');
 
+    const DEFAULT_FILE_COLUMN_WIDTH = 140;
+    const DEFAULT_LINE_COLUMN_WIDTH = 50;
+    const DEFAULT_NAME_COLUMN_WIDTH = null;
+    const MIN_NAME_COLUMN_WIDTH = 120;
+    const MAX_NAME_COLUMN_WIDTH = 520;
+    const MIN_FILE_COLUMN_WIDTH = 90;
+    const MAX_FILE_COLUMN_WIDTH = 360;
+    const MIN_LINE_COLUMN_WIDTH = 42;
+    const MAX_LINE_COLUMN_WIDTH = 120;
+
     let defaultNewMode = 'tree';
     let defaultNewDirection = 'right';
     const instanceStateMap = new Map();
@@ -1387,6 +1453,11 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     let loadedNodes = new Set();
     let nodeChildrenCache = new Map();  // nodeId → children items[]
     let expandedNodeIds = new Set();    // nodeIds currently expanded
+    let selectedTreeNodeId = '';
+    let nameColumnWidth = DEFAULT_NAME_COLUMN_WIDTH;
+    let fileColumnWidth = DEFAULT_FILE_COLUMN_WIDTH;
+    let lineColumnWidth = DEFAULT_LINE_COLUMN_WIDTH;
+    let columnDragState = null;
 
     // ── View mode: 'tree' | 'graph' ─────────────────────────────────────
     let viewMode = 'tree';
@@ -1404,10 +1475,25 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         nodeChildrenCache: new Map(),
         expandedNodeIds: new Set(),
         lastUpdateData: null,
+        selectedTreeNodeId: '',
         includeGlob: '',
         excludeGlob: '',
         filtersExpanded: false,
+        nameColumnWidth: DEFAULT_NAME_COLUMN_WIDTH,
+        fileColumnWidth: DEFAULT_FILE_COLUMN_WIDTH,
+        lineColumnWidth: DEFAULT_LINE_COLUMN_WIDTH,
       };
+    }
+
+    function normalizeColumnWidth(value, fallback, minWidth, maxWidth) {
+      if (value == null) {
+        return fallback;
+      }
+      const width = Number(value);
+      if (!Number.isFinite(width)) {
+        return fallback;
+      }
+      return Math.max(minWidth, Math.min(maxWidth, Math.round(width)));
     }
 
     function normalizeGlobInput(value) {
@@ -1420,6 +1506,31 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       fileFiltersToggle.classList.toggle('active', isExpanded);
       fileFiltersToggle.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
       fileFiltersToggle.textContent = isExpanded ? 'Files ▾' : 'Files ▸';
+    }
+
+    function applyColumnWidthsUi() {
+      if (nameColumnWidth == null) {
+        paneRoot.style.removeProperty('--mapview-name-col-width');
+      } else {
+        paneRoot.style.setProperty('--mapview-name-col-width', nameColumnWidth + 'px');
+      }
+      paneRoot.style.setProperty('--mapview-file-col-width', fileColumnWidth + 'px');
+      paneRoot.style.setProperty('--mapview-line-col-width', lineColumnWidth + 'px');
+    }
+
+    function applyTreeSelectionUi() {
+      const rows = refSection.querySelectorAll('.tree-row');
+      for (const row of rows) {
+        const nodeEl = row.closest('.tree-node');
+        const isSelected = !!nodeEl && nodeEl.dataset.nodeId === selectedTreeNodeId;
+        row.classList.toggle('selected', isSelected);
+      }
+    }
+
+    function setSelectedTreeNode(nodeId) {
+      selectedTreeNodeId = typeof nodeId === 'string' ? nodeId : '';
+      syncActiveState();
+      applyTreeSelectionUi();
     }
 
     function cloneNodeChildrenCache(sourceMap) {
@@ -1464,12 +1575,17 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       loadedNodes = state.loadedNodes;
       nodeChildrenCache = state.nodeChildrenCache;
       expandedNodeIds = state.expandedNodeIds;
+      selectedTreeNodeId = state.selectedTreeNodeId || '';
+      nameColumnWidth = normalizeColumnWidth(state.nameColumnWidth, DEFAULT_NAME_COLUMN_WIDTH, MIN_NAME_COLUMN_WIDTH, MAX_NAME_COLUMN_WIDTH);
       viewMode = state.viewMode;
       graphDirection = state.graphDirection;
       lastUpdateData = state.lastUpdateData;
       includeGlobInput.value = state.includeGlob || '';
       excludeGlobInput.value = state.excludeGlob || '';
       applyFileFilterUi(state.filtersExpanded);
+      fileColumnWidth = normalizeColumnWidth(state.fileColumnWidth, DEFAULT_FILE_COLUMN_WIDTH, MIN_FILE_COLUMN_WIDTH, MAX_FILE_COLUMN_WIDTH);
+      lineColumnWidth = normalizeColumnWidth(state.lineColumnWidth, DEFAULT_LINE_COLUMN_WIDTH, MIN_LINE_COLUMN_WIDTH, MAX_LINE_COLUMN_WIDTH);
+      applyColumnWidthsUi();
     }
 
     function syncActiveState() {
@@ -1478,12 +1594,16 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       state.viewMode = viewMode;
       state.graphDirection = graphDirection;
       state.lastUpdateData = lastUpdateData;
+      state.selectedTreeNodeId = selectedTreeNodeId;
       state.loadedNodes = loadedNodes;
       state.nodeChildrenCache = nodeChildrenCache;
       state.expandedNodeIds = expandedNodeIds;
       state.includeGlob = normalizeGlobInput(includeGlobInput.value);
       state.excludeGlob = normalizeGlobInput(excludeGlobInput.value);
       state.filtersExpanded = !fileFilters.hidden;
+      state.nameColumnWidth = nameColumnWidth;
+      state.fileColumnWidth = fileColumnWidth;
+      state.lineColumnWidth = lineColumnWidth;
     }
 
     function renderInstanceTabs() {
@@ -1524,6 +1644,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         const rootNode = lastUpdateData.rootNode || null;
         renderTreeList(refSection, rootNode ? [rootNode] : (lastUpdateData.refNodes || []), 0);
         restoreTreeExpansions(refSection);
+        applyTreeSelectionUi();
       }
     }
 
@@ -1561,9 +1682,13 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         state.nodeChildrenCache = cloneNodeChildrenCache(opts.fromState.nodeChildrenCache || new Map());
         state.expandedNodeIds = new Set(opts.fromState.expandedNodeIds || []);
         state.lastUpdateData = cloneLastUpdateData(opts.fromState.lastUpdateData);
+        state.selectedTreeNodeId = typeof opts.fromState.selectedTreeNodeId === 'string' ? opts.fromState.selectedTreeNodeId : '';
         state.includeGlob = normalizeGlobInput(opts.fromState.includeGlob || '');
         state.excludeGlob = normalizeGlobInput(opts.fromState.excludeGlob || '');
         state.filtersExpanded = !!opts.fromState.filtersExpanded;
+        state.nameColumnWidth = normalizeColumnWidth(opts.fromState.nameColumnWidth, DEFAULT_NAME_COLUMN_WIDTH, MIN_NAME_COLUMN_WIDTH, MAX_NAME_COLUMN_WIDTH);
+        state.fileColumnWidth = normalizeColumnWidth(opts.fromState.fileColumnWidth, DEFAULT_FILE_COLUMN_WIDTH, MIN_FILE_COLUMN_WIDTH, MAX_FILE_COLUMN_WIDTH);
+        state.lineColumnWidth = normalizeColumnWidth(opts.fromState.lineColumnWidth, DEFAULT_LINE_COLUMN_WIDTH, MIN_LINE_COLUMN_WIDTH, MAX_LINE_COLUMN_WIDTH);
       }
       instanceStateMap.set(id, state);
       insertInstanceOrder(id, opts.afterInstanceId);
@@ -1606,6 +1731,10 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
           nodeChildrenCache: cloneNodeChildrenCache(state.nodeChildrenCache),
           expandedNodeIds: new Set(state.expandedNodeIds),
           lastUpdateData: cloneLastUpdateData(state.lastUpdateData),
+            selectedTreeNodeId: state.selectedTreeNodeId,
+          nameColumnWidth: state.nameColumnWidth,
+          fileColumnWidth: state.fileColumnWidth,
+          lineColumnWidth: state.lineColumnWidth,
         },
       };
     }
@@ -1813,6 +1942,80 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       syncActiveState();
     }
 
+    function beginColumnDrag(splitterEl, splitterType, event) {
+      if (event.button !== 0) { return; }
+      columnDragState = {
+        splitterType: splitterType,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startNameWidth: columnWidthPx(paneRoot.querySelector('.table-header .col-name')),
+        startFileWidth: fileColumnWidth,
+        startLineWidth: lineColumnWidth,
+      };
+      paneRoot.classList.add('dragging-columns');
+      splitterEl.setPointerCapture?.(event.pointerId);
+      event.stopPropagation();
+      event.preventDefault();
+    }
+
+    function updateColumnDrag(event) {
+      if (!columnDragState || event.pointerId !== columnDragState.pointerId) { return; }
+      const delta = event.clientX - columnDragState.startX;
+      if (columnDragState.splitterType === 'file') {
+        nameColumnWidth = normalizeColumnWidth(
+          columnDragState.startNameWidth + delta,
+          DEFAULT_NAME_COLUMN_WIDTH,
+          MIN_NAME_COLUMN_WIDTH,
+          MAX_NAME_COLUMN_WIDTH
+        );
+        fileColumnWidth = normalizeColumnWidth(
+          columnDragState.startFileWidth - delta,
+          DEFAULT_FILE_COLUMN_WIDTH,
+          MIN_FILE_COLUMN_WIDTH,
+          MAX_FILE_COLUMN_WIDTH
+        );
+      } else if (columnDragState.splitterType === 'line') {
+        fileColumnWidth = normalizeColumnWidth(
+          columnDragState.startFileWidth + delta,
+          DEFAULT_FILE_COLUMN_WIDTH,
+          MIN_FILE_COLUMN_WIDTH,
+          MAX_FILE_COLUMN_WIDTH
+        );
+        lineColumnWidth = normalizeColumnWidth(
+          columnDragState.startLineWidth - delta,
+          DEFAULT_LINE_COLUMN_WIDTH,
+          MIN_LINE_COLUMN_WIDTH,
+          MAX_LINE_COLUMN_WIDTH
+        );
+      }
+      applyColumnWidthsUi();
+      syncActiveState();
+    }
+
+    function endColumnDrag(event) {
+      if (!columnDragState || (event && event.pointerId !== columnDragState.pointerId)) { return; }
+      columnDragState = null;
+      paneRoot.classList.remove('dragging-columns');
+      syncActiveState();
+    }
+
+    function columnWidthPx(el) {
+      if (!(el instanceof Element)) { return 0; }
+      const rect = el.getBoundingClientRect();
+      return Math.max(0, Math.round(rect.width));
+    }
+
+    paneRoot.addEventListener('pointerdown', (event) => {
+      if (!(event.target instanceof Element)) { return; }
+      const splitter = event.target.closest('.col-splitter');
+      if (!splitter || !splitter.dataset.splitter) { return; }
+      beginColumnDrag(splitter, splitter.dataset.splitter, event);
+    });
+
+    paneRoot.addEventListener('pointermove', updateColumnDrag);
+    paneRoot.addEventListener('pointerup', endColumnDrag);
+    paneRoot.addEventListener('pointercancel', endColumnDrag);
+
     viewTabTree.addEventListener('click', () => setViewState('tree', graphDirection));
     viewTabGraph.addEventListener('click', () => setViewState('graph', graphDirection));
     graphDirectionSelect.addEventListener('change', () => setViewState('graph', graphDirectionSelect.value));
@@ -1938,6 +2141,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         if (rootNode) {
           restoreTreeExpansions(refSection);
         }
+        applyTreeSelectionUi();
 
         if (viewMode === 'tree') {
           content.style.display = 'block';
@@ -1986,6 +2190,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         childrenEl.innerHTML = msg.items.map(function(item) {
           return renderTreeNodeHtml(item, depth);
         }).join('');
+        applyTreeSelectionUi();
         return;
       }
     }
@@ -2058,7 +2263,9 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         + kindHtml
         + '<span class="item-name">' + nameHtml + '</span>'
         + '</div>'
+        + '<div class="col-splitter" data-splitter="file" aria-hidden="true"></div>'
         + '<div class="col-file" title="' + escapeAttr(item.detail) + '">' + escapeHtml(item.detail) + '</div>'
+        + '<div class="col-splitter" data-splitter="line" aria-hidden="true"></div>'
         + '<div class="col-line">' + (callLine + 1) + '</div>'
         + '</div>'
         + '<div class="tree-children" style="display:none"></div>'
@@ -2199,7 +2406,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       }
 
       const treeRow = e.target.closest('.tree-row');
-      if (treeRow && !e.target.closest('.tree-toggle')) {
+      if (treeRow && !e.target.closest('.tree-toggle') && !e.target.closest('.col-splitter')) {
+        setSelectedTreeNode(treeRow.closest('.tree-node')?.dataset.nodeId || '');
         if (e.ctrlKey) {
           const nodeEl = treeRow.closest('.tree-node');
           const toggleEl = nodeEl ? nodeEl.querySelector(':scope > .tree-row .tree-toggle') : null;
@@ -2220,7 +2428,8 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     // Double-click on tree row: open in editor AND update peek view
     content.addEventListener('dblclick', (e) => {
       const treeRow = e.target.closest('.tree-row');
-      if (treeRow && !e.target.closest('.tree-toggle')) {
+      if (treeRow && !e.target.closest('.tree-toggle') && !e.target.closest('.col-splitter')) {
+        setSelectedTreeNode(treeRow.closest('.tree-node')?.dataset.nodeId || '');
         vscodeApi.postMessage({
           type: 'jumpTo',
           uri: treeRow.dataset.uri,
