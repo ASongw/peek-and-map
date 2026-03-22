@@ -146,6 +146,7 @@ peek/
 > 补充：Map View Header 中新增 `Files ▸` 控件；默认收起，展开后显示 `files to include` 与 `files to exclude` 两个输入框，支持逗号分隔多个 glob。
 
 > 图形文本补充：在垂直方向（`up/down`）下，若节点名为限定名（如 `Class::method`），节点内符号会改为两行渲染：第一行 `Class::`，第二行 `method`。
+> Outline 文本补充：`mapView.outlineQualifiedNameDisplay` 可控制 Outline 视图限定名的显示方式：`twoLine`（两行，第一行保留类名前缀与 `::`，第二行显示成员名）、`singleLine`（单行完整限定名）、`hideClassName`（仅显示成员名）；该选项作用于整个 Outline 视图。
 
 #### 消息类型
 
@@ -188,4 +189,5 @@ peek/
 - `mapView.wheelPanSensitivity`：Map 图形视图中滚轮滚动平移灵敏度（默认 `1`，用于普通滚轮与 `Shift+滚轮`）
 - `mapView.wheelTiltPanSensitivity`：Map 图形视图中鼠标滚轮左右拨动平移灵敏度（默认 `0.28`，用于 `deltaX`）
 - `mapView.singleClickAction`：Map 视图单击行为（默认 `peekOnly`；可选 `peekOnly` / `jumpTo`）
+- `mapView.outlineQualifiedNameDisplay`：Outline 视图限定名显示方式（默认 `twoLine`；可选 `twoLine` / `singleLine` / `hideClassName`）
 - `symbolSearch.singleClickAction`：Symbol Search 结果单击行为（默认 `peekOnly`；可选 `peekOnly` / `jumpTo`）

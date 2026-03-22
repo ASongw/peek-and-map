@@ -48,10 +48,12 @@
 | **根节点入图/入树** | 当前分析符号不再显示在顶栏，而是直接作为根节点显示在树形与图形视图中，交互与其他节点一致。 |
 | **懒加载树展开** | 树节点支持点击 SVG 箭头递归加载子引用，已展开节点可折叠/展开无需重新请求；支持 `Ctrl+单击` 节点执行展开/收起。 |
 | **单击/双击行为可配置** | 默认单击树节点在 Peek View 中预览定义、双击在编辑器中打开并定位；可通过 `mapView.singleClickAction` 将单击改为“预览+打开编辑器”。 |
+| **Outline 两行显示** | 可通过 `mapView.outlineTwoLineQualifiedName` 让 Outline 中的限定名按两行显示；启用后第一行保留类名前缀和 `::`，第二行显示方法名，作用于整个 Outline 视图。 |
 | **图形视图（Graph）** | 图形视图以 BFS 树布局展示符号关系，Bezier 曲线连边；普通节点为圆角矩形，函数声明节点使用直角梯形边框；通过符号名前的彩色 Emoji 图标区分对象类型。|
 | **图形视图节点合并** | 当同一符号在多处引用目标符号时，图形视图中自动将重复的节点合并为一个，节点内部以行号徽章（如 `L10` `L20` `L30`）展示所有调用位置；单击/双击不同行号徽章分别触发预览/跳转到对应的调用位置，与树形视图中对应节点的行为一致。 |
 | **图形视图交互** | 默认单击节点在 Peek View 中预览（preserveFocus）、双击在编辑器中打开；可通过 `mapView.singleClickAction` 调整单击行为。点击节点侧边 `+/-` 按钮或 `Ctrl+单击` 节点可展开/折叠子节点、拖拽平移；若某节点尝试展开后无子节点，其侧边按钮会变为空心圆提示“无可展开内容”；滚轮默认上下平移，`Shift+滚轮` 左右平移，鼠标滚轮左右拨动可左右平移，`Ctrl+滚轮` 缩放；等待动画显示在节点延伸方向（上/下/左/右）。 |
 | **视图状态持久化** | Map 视图会保存并恢复“最后一次切换”的状态：`Outline/Graph` 模式以及 Graph 的方向设置；新建实例默认继承该最近设置。 |
+| **Outline 名称显示模式** | 可通过 `mapView.outlineQualifiedNameDisplay` 控制 Outline 中限定名的展示方式：`twoLine`（两行，第一行保留 `Class::`，第二行显示成员名）、`singleLine`（单行完整限定名）、`hideClassName`（仅显示成员名）。 |
 | **实例过滤状态保持** | 每个分析实例会独立保存 `Files` 过滤面板展开状态与 include/exclude 输入内容；切换实例后自动恢复。 |
 | **外观一致性** | Map 视图的面板背景与实例标签栏保持一致，Outline 区域与 Graph 区域会继承该背景色，整体观感更统一。 |
 | **折叠状态恢复** | 折叠靠近根部节点时会保留其后代展开状态；重新展开后自动恢复已展开子节点。 |
@@ -81,6 +83,7 @@
 | `mapView.wheelPanSensitivity` | number | 1 | Map 图形视图中滚轮滚动平移灵敏度（普通滚轮上下平移与 `Shift+滚轮` 左右平移）。 |
 | `mapView.wheelTiltPanSensitivity` | number | 0.3 | Map 图形视图中鼠标滚轮左右拨动（水平滚轮）平移灵敏度。 |
 | `mapView.singleClickAction` | string | `peekOnly` | Map 视图节点单击行为：`peekOnly`（仅更新 Peek）或 `jumpTo`（同时更新 Peek 和编辑器）。 |
+| `mapView.outlineQualifiedNameDisplay` | string | `twoLine` | Outline 视图限定名显示方式：`twoLine`（第一行 `Class::`，第二行 `method`）、`singleLine`（完整限定名）、`hideClassName`（仅成员名）。 |
 | `symbolSearch.singleClickAction` | string | `peekOnly` | Symbol Search 结果单击行为：`peekOnly`（仅更新 Peek）或 `jumpTo`（同时更新 Peek 和编辑器）。 |
 
 ---

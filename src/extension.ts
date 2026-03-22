@@ -80,7 +80,8 @@ export function activate(context: vscode.ExtensionContext): void {
       if (
         e.affectsConfiguration('mapView.wheelPanSensitivity') ||
         e.affectsConfiguration('mapView.wheelTiltPanSensitivity') ||
-        e.affectsConfiguration('mapView.singleClickAction')
+        e.affectsConfiguration('mapView.singleClickAction') ||
+        e.affectsConfiguration('mapView.outlineQualifiedNameDisplay')
       ) {
         mapProvider.pushInteractionConfig();
       }

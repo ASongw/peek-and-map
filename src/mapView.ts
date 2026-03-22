@@ -112,12 +112,18 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       wheelPanSensitivity: this._getConfigNumber('wheelPanSensitivity', 1, 0.05, 5),
       wheelTiltPanSensitivity: this._getConfigNumber('wheelTiltPanSensitivity', 0.28, 0.05, 5),
       singleClickAction: this._getSingleClickAction(),
+      outlineQualifiedNameDisplay: this._getOutlineQualifiedNameDisplay(),
     });
   }
 
   private _getSingleClickAction(): 'peekOnly' | 'jumpTo' {
     const raw = vscode.workspace.getConfiguration('mapView').get<string>('singleClickAction', 'peekOnly');
     return raw === 'jumpTo' ? 'jumpTo' : 'peekOnly';
+  }
+
+  private _getOutlineQualifiedNameDisplay(): 'twoLine' | 'singleLine' | 'hideClassName' {
+    const raw = vscode.workspace.getConfiguration('mapView').get<string>('outlineQualifiedNameDisplay', 'twoLine');
+    return raw === 'singleLine' || raw === 'hideClassName' ? raw : 'twoLine';
   }
 
   private _getConfigNumber(key: string, fallback: number, min: number, max: number): number {
@@ -219,6 +225,48 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         case 'setViewMode':
           await this._saveViewState(msg.mode, this._graphDirection);
           break;
+
+        case 'copyNodeValue': {
+          const copyMode = typeof msg.copyMode === 'string' ? msg.copyMode : '';
+          const symbolName = typeof msg.symbolName === 'string' ? msg.symbolName : '';
+          const fileName = typeof msg.fileName === 'string' ? msg.fileName : '';
+          const relativePath = typeof msg.relativePath === 'string' ? msg.relativePath : '';
+          const uriText = typeof msg.uri === 'string' ? msg.uri : '';
+
+          let text = '';
+          try {
+            const uri = uriText ? vscode.Uri.parse(uriText) : undefined;
+            const absolutePath = uri ? uri.fsPath : '';
+            if (copyMode === 'symbolName') {
+              text = symbolName;
+            } else if (copyMode === 'fileName') {
+              text = fileName || (absolutePath ? path.basename(absolutePath) : '');
+            } else if (copyMode === 'relativePath') {
+              text = relativePath || (absolutePath ? path.basename(absolutePath) : '');
+            } else if (copyMode === 'absolutePath') {
+              text = absolutePath;
+            }
+          } catch {
+            if (copyMode === 'symbolName') {
+              text = symbolName;
+            } else if (copyMode === 'fileName') {
+              text = fileName;
+            } else if (copyMode === 'relativePath') {
+              text = relativePath;
+            } else if (copyMode === 'absolutePath') {
+              text = uriText;
+            }
+          }
+
+          if (text) {
+            try {
+              await vscode.env.clipboard.writeText(text);
+            } catch {
+              // ignore clipboard failures
+            }
+          }
+          break;
+        }
       }
     });
   }
@@ -963,6 +1011,34 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.08));
     }
 
+    .node-context-menu {
+      position: fixed;
+      min-width: 180px;
+      padding: 4px;
+      border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border, #333));
+      background: var(--vscode-menu-background, var(--vscode-editorWidget-background, #252526));
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+      z-index: 1050;
+    }
+    .node-context-menu[hidden] {
+      display: none;
+    }
+    .node-context-item {
+      width: 100%;
+      height: 24px;
+      border: none;
+      border-radius: 3px;
+      background: transparent;
+      color: var(--vscode-menu-foreground, var(--vscode-foreground, #d4d4d4));
+      text-align: left;
+      padding: 0 8px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .node-context-item:hover {
+      background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.08));
+    }
+
     #split-context-menu {
       position: fixed;
       min-width: 160px;
@@ -1208,6 +1284,26 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .tree-row .item-name .qualified-name.two-line {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: flex-start;
+      line-height: 1.1;
+      white-space: nowrap;
+    }
+    .tree-row .item-name .qualified-name.two-line .qualified-name-owner-line {
+      display: inline-flex;
+      align-items: baseline;
+      min-width: 0;
+      max-width: 100%;
+    }
+    .tree-row .item-name .qualified-name.two-line .qualified-name-owner,
+    .tree-row .item-name .qualified-name.two-line .qualified-name-sep,
+    .tree-row .item-name .qualified-name.two-line .qualified-name-member {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
     .col-name {
       flex: 1;
       min-width: 0;
@@ -1328,11 +1424,11 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     </div>
     <div id="header">
       <button id="search-btn" title="Analyze symbol at cursor"><span class="btn-icon">🔍</span> Analysis</button>
-      <button id="file-filters-toggle" aria-expanded="false" title="Toggle file include/exclude filters">Files ▸</button>
       <div id="view-tabs" role="tablist" aria-label="Map View Mode">
         <button id="view-tab-tree" class="view-tab active" role="tab" aria-selected="true" title="Outline view">Outline</button>
         <button id="view-tab-graph" class="view-tab" role="tab" aria-selected="false" title="Graph view">Graph</button>
       </div>
+      <button id="file-filters-toggle" aria-expanded="false" title="Toggle file include/exclude filters">Files ▸</button>
       <div id="graph-direction-wrap">
         <label for="graph-direction">Direction</label>
         <select id="graph-direction" title="Graph growth direction">
@@ -1370,6 +1466,12 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       <button class="instance-context-item" data-action="copy-right">Copy to Right</button>
       <button class="instance-context-item" data-action="move-other-pane">Move to Other Pane</button>
       <button class="instance-context-item" data-action="copy-other-pane">Copy to Other Pane</button>
+    </div>
+    <div id="node-context-menu" class="node-context-menu" hidden>
+      <button class="node-context-item" data-action="copy-symbol-name">Copy Symbol Name</button>
+      <button class="node-context-item" data-action="copy-file-name">Copy File Name</button>
+      <button class="node-context-item" data-action="copy-relative-path">Copy Relative Path</button>
+      <button class="node-context-item" data-action="copy-absolute-path">Copy Absolute Path</button>
     </div>
   </template>
 
@@ -1418,8 +1520,13 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     const content      = paneRoot.querySelector('#content');
     const instanceTabs = paneRoot.querySelector('#instance-tabs');
     const instanceContextMenu = paneRoot.querySelector('#instance-context-menu');
+    const nodeContextMenu = paneRoot.querySelector('#node-context-menu');
     const moveOtherPaneMenuItem = instanceContextMenu.querySelector('[data-action="move-other-pane"]');
     const copyOtherPaneMenuItem = instanceContextMenu.querySelector('[data-action="copy-other-pane"]');
+    const copySymbolNameMenuItem = nodeContextMenu.querySelector('[data-action="copy-symbol-name"]');
+    const copyFileNameMenuItem = nodeContextMenu.querySelector('[data-action="copy-file-name"]');
+    const copyRelativePathMenuItem = nodeContextMenu.querySelector('[data-action="copy-relative-path"]');
+    const copyAbsolutePathMenuItem = nodeContextMenu.querySelector('[data-action="copy-absolute-path"]');
     const searchBtn    = paneRoot.querySelector('#search-btn');
     const fileFiltersToggle = paneRoot.querySelector('#file-filters-toggle');
     const viewTabTree  = paneRoot.querySelector('#view-tab-tree');
@@ -1449,6 +1556,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     const instanceOrder = [];
     let activeInstanceId = '';
     let contextMenuInstanceId = '';
+    let nodeContextMenuState = null;
 
     let loadedNodes = new Set();
     let nodeChildrenCache = new Map();  // nodeId → children items[]
@@ -1462,6 +1570,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     // ── View mode: 'tree' | 'graph' ─────────────────────────────────────
     let viewMode = 'tree';
     let graphDirection = 'right'; // 'up' | 'down' | 'left' | 'right'
+    let outlineQualifiedNameDisplay = 'twoLine';
     // Store last update data for graph rendering
     let lastUpdateData = null;
 
@@ -1801,6 +1910,53 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       instanceContextMenu.hidden = true;
     }
 
+    function hideNodeContextMenu() {
+      nodeContextMenuState = null;
+      nodeContextMenu.hidden = true;
+    }
+
+    function getNodeCopyPayload(source) {
+      if (!source) { return null; }
+      const relativePath = typeof source.relativePath === 'string' ? source.relativePath : '';
+      const symbolName = typeof source.symbolName === 'string' ? source.symbolName : '';
+      const uri = typeof source.uri === 'string' ? source.uri : '';
+      const fileName = relativePath
+        ? (relativePath.split(/[\\/]/).pop() || relativePath)
+        : (typeof source.fileName === 'string' ? source.fileName : '');
+      return { symbolName, fileName, relativePath, uri };
+    }
+
+    function showNodeContextMenu(source, clientX, clientY) {
+      const payload = getNodeCopyPayload(source);
+      if (!payload) { return; }
+      hideInstanceContextMenu();
+      hideSplitContextMenu();
+      nodeContextMenuState = payload;
+      nodeContextMenu.hidden = false;
+      nodeContextMenu.style.left = clientX + 'px';
+      nodeContextMenu.style.top = clientY + 'px';
+      const rect = nodeContextMenu.getBoundingClientRect();
+      const maxX = window.innerWidth - rect.width - 4;
+      const maxY = window.innerHeight - rect.height - 4;
+      const x = Math.max(4, Math.min(clientX, maxX));
+      const y = Math.max(4, Math.min(clientY, maxY));
+      nodeContextMenu.style.left = x + 'px';
+      nodeContextMenu.style.top = y + 'px';
+    }
+
+    function copyNodeContextValue(copyMode) {
+      if (!nodeContextMenuState) { return; }
+      vscodeApi.postMessage({
+        type: 'copyNodeValue',
+        copyMode,
+        symbolName: nodeContextMenuState.symbolName,
+        fileName: nodeContextMenuState.fileName,
+        relativePath: nodeContextMenuState.relativePath,
+        uri: nodeContextMenuState.uri,
+      });
+      hideNodeContextMenu();
+    }
+
     function showInstanceContextMenu(instanceId, clientX, clientY) {
       contextMenuInstanceId = instanceId;
       const multiPane = paneControllers.size > 1;
@@ -1867,20 +2023,40 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       }
     });
 
+    nodeContextMenu.addEventListener('click', (event) => {
+      const item = event.target.closest('.node-context-item');
+      if (!item || !nodeContextMenuState) { return; }
+      const action = item.dataset.action;
+      if (action === 'copy-symbol-name') {
+        copyNodeContextValue('symbolName');
+      } else if (action === 'copy-file-name') {
+        copyNodeContextValue('fileName');
+      } else if (action === 'copy-relative-path') {
+        copyNodeContextValue('relativePath');
+      } else if (action === 'copy-absolute-path') {
+        copyNodeContextValue('absolutePath');
+      }
+    });
+
     document.addEventListener('click', (event) => {
-      if (instanceContextMenu.hidden) { return; }
+      if (instanceContextMenu.hidden && nodeContextMenu.hidden) { return; }
       if (!event.target.closest('#instance-context-menu')) {
         hideInstanceContextMenu();
+      }
+      if (!event.target.closest('#node-context-menu')) {
+        hideNodeContextMenu();
       }
     });
 
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
         hideInstanceContextMenu();
+        hideNodeContextMenu();
       }
     });
 
     window.addEventListener('blur', hideInstanceContextMenu);
+    window.addEventListener('blur', hideNodeContextMenu);
     instanceTabs.addEventListener('scroll', hideInstanceContextMenu);
 
     addInstance();
@@ -2091,6 +2267,16 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
         gWheelPanSensitivity = clampSensitivity(msg.wheelPanSensitivity, 1);
         gWheelTiltPanSensitivity = clampSensitivity(msg.wheelTiltPanSensitivity, 0.28);
         singleClickAction = normalizeSingleClickAction(msg.singleClickAction);
+        outlineQualifiedNameDisplay = msg.outlineQualifiedNameDisplay === 'singleLine' || msg.outlineQualifiedNameDisplay === 'hideClassName'
+          ? msg.outlineQualifiedNameDisplay
+          : 'twoLine';
+        if (viewMode === 'tree' && lastUpdateData) {
+          renderTreeList(refSection, lastUpdateData.rootNode ? [lastUpdateData.rootNode] : (lastUpdateData.refNodes || []), 0);
+          if (lastUpdateData.rootNode) {
+            restoreTreeExpansions(refSection);
+          }
+          applyTreeSelectionUi();
+        }
         return;
       }
 
@@ -2218,7 +2404,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       };
     }
 
-    function renderQualifiedNameHtml(name, memberKind) {
+    function renderQualifiedNameHtml(name, memberKind, twoLine) {
       const part = splitQualifiedName(name);
       const kindKey = memberKind || 'Function';
       const memberColor = 'var(--peek-kind-' + kindKey + ',var(--vscode-symbolIcon-functionForeground,#dcdcaa))';
@@ -2227,6 +2413,41 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       }
       const ownerColor = 'var(--peek-qualified-owner,var(--peek-kind-Class,var(--vscode-symbolIcon-classForeground,var(--vscode-editor-foreground,#d4d4d4))))';
       const sepColor = 'var(--peek-operator,var(--vscode-editor-foreground,#d4d4d4))';
+      if (twoLine) {
+        return '<span class="qualified-name two-line">'
+          + '<span class="qualified-name-owner-line">'
+          + '<span class="qualified-name-owner" style="color:' + ownerColor + '">' + escapeHtml(part.owner) + '</span>'
+          + '<span class="qualified-name-sep" style="color:' + sepColor + '">::</span>'
+          + '</span>'
+          + '<span class="qualified-name-member" style="color:' + memberColor + '">' + escapeHtml(part.member) + '</span>'
+          + '</span>';
+      }
+      return '<span style="color:' + ownerColor + '">' + escapeHtml(part.owner) + '</span>'
+        + '<span style="color:' + sepColor + '">::</span>'
+        + '<span style="color:' + memberColor + '">' + escapeHtml(part.member) + '</span>';
+    }
+
+    function renderOutlineNameHtml(name, memberKind, displayMode) {
+      const part = splitQualifiedName(name);
+      const kindKey = memberKind || 'Function';
+      const memberColor = 'var(--peek-kind-' + kindKey + ',var(--vscode-symbolIcon-functionForeground,#dcdcaa))';
+      if (!part) {
+        return '<span style="color:' + memberColor + '">' + escapeHtml(stripParams(name || '')) + '</span>';
+      }
+      const ownerColor = 'var(--peek-qualified-owner,var(--peek-kind-Class,var(--vscode-symbolIcon-classForeground,var(--vscode-editor-foreground,#d4d4d4))))';
+      const sepColor = 'var(--peek-operator,var(--vscode-editor-foreground,#d4d4d4))';
+      if (displayMode === 'hideClassName') {
+        return '<span style="color:' + memberColor + '">' + escapeHtml(part.member) + '</span>';
+      }
+      if (displayMode === 'twoLine') {
+        return '<span class="qualified-name two-line">'
+          + '<span class="qualified-name-owner-line">'
+          + '<span class="qualified-name-owner" style="color:' + ownerColor + '">' + escapeHtml(part.owner) + '</span>'
+          + '<span class="qualified-name-sep" style="color:' + sepColor + '">::</span>'
+          + '</span>'
+          + '<span class="qualified-name-member" style="color:' + memberColor + '">' + escapeHtml(part.member) + '</span>'
+          + '</span>';
+      }
       return '<span style="color:' + ownerColor + '">' + escapeHtml(part.owner) + '</span>'
         + '<span style="color:' + sepColor + '">::</span>'
         + '<span style="color:' + memberColor + '">' + escapeHtml(part.member) + '</span>';
@@ -2245,7 +2466,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     function renderTreeNodeHtml(item, depth) {
       const pad = depth * 16;
       const isLeaf = item.nodeId.startsWith('leaf_');
-      const nameHtml = renderQualifiedNameHtml(item.label, item.kind || 'Function');
+      const nameHtml = renderOutlineNameHtml(item.label, item.kind || 'Function', outlineQualifiedNameDisplay);
       const kindHtml = item.kind
         ? '<span class="item-icon" style="color:var(--peek-kind-' + item.kind + ',var(--vscode-foreground,#ccc))">' + kindSymbol(item.kind) + '</span>'
         : '';
@@ -2422,6 +2643,24 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
           );
         }
         return;
+      }
+    });
+
+    content.addEventListener('contextmenu', (e) => {
+      const treeRow = e.target.closest('.tree-row');
+      if (!treeRow) { return; }
+      e.preventDefault();
+      const nodeEl = treeRow.closest('.tree-node');
+      const nameEl = treeRow.querySelector('.item-name');
+      const fileEl = treeRow.querySelector('.col-file');
+      showNodeContextMenu({
+        symbolName: nameEl ? nameEl.textContent.trim() : '',
+        fileName: fileEl ? fileEl.textContent.trim() : '',
+        relativePath: fileEl ? fileEl.textContent.trim() : '',
+        uri: treeRow.dataset.uri,
+      }, e.clientX, e.clientY);
+      if (nodeEl) {
+        setSelectedTreeNode(nodeEl.dataset.nodeId || '');
       }
     });
 
@@ -3749,9 +3988,18 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
       const cx = e.clientX - rect.left;
       const cy = e.clientY - rect.top;
       const hit = graphHitTest(cx, cy);
-      if (hit) { return; }
       e.preventDefault();
+      if (hit) {
+        showNodeContextMenu({
+          symbolName: hit.label || (hit.data && hit.data.label) || '',
+          fileName: hit.data && hit.data.detail ? (hit.data.detail.split(/[\\/]/).pop() || hit.data.detail) : '',
+          relativePath: hit.data && hit.data.detail ? hit.data.detail : '',
+          uri: hit.data && hit.data.uri ? hit.data.uri : '',
+        }, e.clientX, e.clientY);
+        return;
+      }
       hideInstanceContextMenu();
+      hideNodeContextMenu();
       showSplitContextMenu(e.clientX, e.clientY);
     });
 
@@ -3991,6 +4239,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
           wheelPanSensitivity: msg.wheelPanSensitivity,
           wheelTiltPanSensitivity: msg.wheelTiltPanSensitivity,
           singleClickAction: msg.singleClickAction,
+          outlineQualifiedNameDisplay: msg.outlineQualifiedNameDisplay,
         };
         for (const pane of paneControllers.values()) {
           pane.handleMessage(msg);
@@ -4029,7 +4278,7 @@ export class MapViewProvider implements vscode.WebviewViewProvider {
     document.addEventListener('contextmenu', (event) => {
       const target = event.target;
       if (!(target instanceof Element)) { return; }
-      if (target.closest('.instance-tab, .instance-tab-close, .instance-context-menu, .instance-context-item, .tree-row, .tree-toggle, canvas, button, select, input, textarea')) {
+      if (target.closest('.instance-tab, .instance-tab-close, .instance-context-menu, .instance-context-item, .node-context-menu, .node-context-item, .tree-row, .tree-toggle, canvas, button, select, input, textarea')) {
         return;
       }
       event.preventDefault();

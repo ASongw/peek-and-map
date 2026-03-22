@@ -2,7 +2,7 @@
   "name": "peek-and-map",
   "displayName": "Peek and Map",
   "description": "Provide two views to peek definition and map relationship",
-  "version": "1.3.9",
+  "version": "1.3.10",
   "publisher": "asong",
   "icon": "media/icon.png",
   "license": "MIT",
@@ -132,6 +132,21 @@
             "单击同时更新 Peek 并打开编辑器"
           ],
           "description": "Map 视图节点单击行为"
+        },
+        "mapView.outlineQualifiedNameDisplay": {
+          "type": "string",
+          "default": "twoLine",
+          "enum": [
+            "twoLine",
+            "singleLine",
+            "hideClassName"
+          ],
+          "enumDescriptions": [
+            "两行显示：第一行保留类名前缀与 ::，第二行显示成员名",
+            "单行显示：保留完整限定名，例如 Class::method",
+            "隐藏类名：仅显示成员名，例如 method"
+          ],
+          "description": "Outline 视图限定名显示方式"
         },
         "symbolSearch.singleClickAction": {
           "type": "string",
