@@ -1,9 +1,9 @@
 {
   "name": "peek-and-map",
   "displayName": "Peek and Map",
-  "description": "Provide two views to peek definition and map relationship",
+  "description": "Provides views for previewing code and visualizing relationships, like Source Insight.",
   "version": "1.3.11",
-  "publisher": "asong",
+  "publisher": "asong-w",
   "icon": "media/icon.png",
   "license": "MIT",
   "repository": {
@@ -14,8 +14,13 @@
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Other"
+    "Visualization",
+    "Programming Languages"
   ],
+  "galleryBanner": {
+    "color": "#0E639C",
+    "theme": "dark"
+  },
   "activationEvents": [
     "onStartupFinished"
   ],
